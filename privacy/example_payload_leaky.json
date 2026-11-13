@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "install_id": "not-a-uuid",
+  "sent_at": "2026-11-13T18:22:04Z",
+  "app": {
+    "version": "0.1.0",
+    "platform": "windows",
+    "game_flavor": "forever",
+    "region": "us"
+  },
+  "consent": {
+    "scope": "aggregate_stats",
+    "policy_version": "2026-11-01",
+    "granted_at": "2026-11-10T02:11:00Z"
+  },
+  "sessions": [
+    {
+      "date": "2026-11-12T20:38:00",
+      "duration_bucket": "6h+",
+      "class": "PALADIN",
+      "level": 33,
+      "character_name": "Dead Sadfatkid",
+      "guild": "Origins",
+      "kills": 495,
+      "deaths": 1,
+      "damage_done": 232358,
+      "damage_taken": 79196,
+      "dps_bucket": "10-20"
+    }
+  ],
+  "wealth": [
+    { "date": "2026-11-12", "class": "PALADIN", "level": 33, "money_bucket": 150314 }
+  ],
+  "notes": "leveled in Hillsbrad with Slouch Mage"
+}

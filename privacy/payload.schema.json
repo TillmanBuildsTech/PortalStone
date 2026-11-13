@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/wow-tracker/contribution-v1.json",
+  "title": "WoW tracker anonymous contribution payload",
+  "description": "Everything the local app may send. No names, no GUIDs, no guild identity, no free text. Dates are day buckets; money and prices are magnitude buckets. Validated client-side before send and server-side on receipt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "install_id", "sent_at", "app", "consent"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "install_id": {
+      "type": "string",
+      "description": "Random UUIDv4 generated at install. Never derived from hardware, account, or character.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sent_at": { "type": "string", "format": "date-time" },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "platform", "game_flavor", "region"],
+      "properties": {
+        "version": { "type": "string", "maxLength": 20 },
+        "platform": { "enum": ["windows", "macos", "linux"] },
+        "game_flavor": { "enum": ["forever", "retail", "classic_era", "classic_tbc", "classic_wotlk"] },
+        "region": { "enum": ["us", "eu", "kr", "tw", "cn"] },
+        "ruleset": { "type": "string", "maxLength": 24 }
+      }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "policy_version", "granted_at"],
+      "properties": {
+        "scope": { "const": "aggregate_stats" },
+        "policy_version": { "type": "string", "maxLength": 20 },
+        "granted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "duration_bucket", "class", "level"],
+        "properties": {
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "duration_bucket": { "enum": ["<15m", "15-30m", "30-60m", "1-2h", "2-4h", "4-6h", "6h+"] },
+          "class": { "enum": ["WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID"] },
+          "level": { "type": "integer", "minimum": 1, "maximum": 70 },
+          "level_range": { "type": "string", "pattern": "^\\d{1,2}-\\d{1,2}$" },
+          "zone_ids": { "type": "array", "maxItems": 12, "items": { "type": "integer", "minimum": 1, "maximum": 3000 } },
+          "kills": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "deaths": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "damage_done": { "type": "integer", "minimum": 0 },
+          "damage_taken": { "type": "integer", "minimum": 0 },
+          "dps_bucket": { "enum": ["<10", "10-20", "20-40", "40-80", "80-160", "160-320", "320+"] },
+          "profession_time_bucket": { "enum": ["<10m", "10-30m", "30-60m", "1h+"] }
+        }
+      }
+    },
+    "wealth": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "class", "level", "money_bucket"],
+        "properties": {
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "class": { "enum": ["WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID"] },
+          "level": { "type": "integer", "minimum": 1, "maximum": 70 },
+          "money_bucket": { "enum": ["<1g", "1-5g", "5-10g", "10-25g", "25-50g", "50-100g", "100-500g", "500g+"] },
+          "item_stacks_bucket": { "enum": ["<20", "20-50", "50-100", "100-200", "200+"] }
+        }
+      }
+    },
+    "economy": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "item_id", "house_id", "unit_price_bucket"],
+        "properties": {
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "item_id": { "type": "integer", "minimum": 1, "maximum": 400000 },
+          "house_id": { "type": "integer", "minimum": 100, "maximum": 199 },
+          "unit_price_bucket": { "enum": ["<1s", "1-10s", "10-50s", "50s-1g", "1-5g", "5-20g", "20-100g", "100g+"] },
+          "quantity_bucket": { "enum": ["<10", "10-50", "50-200", "200-1000", "1000+"] }
+        }
+      }
+    },
+    "progression": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "profession", "skill"],
+        "properties": {
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "profession": { "type": "string", "maxLength": 24 },
+          "skill": { "type": "integer", "minimum": 0, "maximum": 400 },
+          "level": { "type": "integer", "minimum": 1, "maximum": 70 }
+        }
+      }
+    },
+    "rares": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["npc_id", "spawn_gap_bucket", "observed_date"],
+        "properties": {
+          "npc_id": { "type": "integer", "minimum": 1, "maximum": 400000 },
+          "spawn_gap_bucket": { "enum": ["<30m", "30-60m", "1-2h", "2-4h", "4-8h", "8h+"] },
+          "observed_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+        }
+      }
+    }
+  }
+}

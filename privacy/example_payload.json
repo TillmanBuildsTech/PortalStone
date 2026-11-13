@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "install_id": "9f1c4a2e-7b3d-4c58-9a10-6d5e8f2b7c31",
+  "sent_at": "2026-11-13T18:22:04Z",
+  "app": {
+    "version": "0.1.0",
+    "platform": "windows",
+    "game_flavor": "forever",
+    "region": "us",
+    "ruleset": "rp-pvp"
+  },
+  "consent": {
+    "scope": "aggregate_stats",
+    "policy_version": "2026-11-01",
+    "granted_at": "2026-11-10T02:11:00Z"
+  },
+  "sessions": [
+    {
+      "date": "2026-11-12",
+      "duration_bucket": "6h+",
+      "class": "PALADIN",
+      "level": 33,
+      "zone_ids": [1456, 1443],
+      "kills": 495,
+      "deaths": 1,
+      "damage_done": 232000,
+      "damage_taken": 79000,
+      "dps_bucket": "10-20",
+      "profession_time_bucket": "30-60m"
+    }
+  ],
+  "wealth": [
+    { "date": "2026-11-12", "class": "PALADIN", "level": 33, "money_bucket": "10-25g", "item_stacks_bucket": "100-200" },
+    { "date": "2026-11-12", "class": "MAGE", "level": 15, "money_bucket": "<1g", "item_stacks_bucket": "100-200" }
+  ],
+  "economy": [
+    { "date": "2026-11-12", "item_id": 2589, "house_id": 110, "unit_price_bucket": "1-10s", "quantity_bucket": "200-1000" },
+    { "date": "2026-11-12", "item_id": 6948, "house_id": 110, "unit_price_bucket": "<1s", "quantity_bucket": "50-200" }
+  ],
+  "progression": [
+    { "date": "2026-11-12", "profession": "BLACKSMITHING", "skill": 180, "level": 33 }
+  ],
+  "rares": [
+    { "npc_id": 3295, "spawn_gap_bucket": "4-8h", "observed_date": "2026-11-12" }
+  ]
+}
