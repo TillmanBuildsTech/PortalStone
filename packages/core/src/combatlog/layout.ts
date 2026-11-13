@@ -1,52 +1,72 @@
 /**
  * Layout detection.
  *
- * Why this file exists: the prototype hard-coded param indices, and it got them wrong in a way
- * that produced zero damage instead of an error (header read as if there were no infoGUID, damage
- * suffix read as if there were). Field positions shift between log versions, with and without
- * the infoGUID, and with/without the mid-line stat block. So we do not assume — we calibrate
- * against the first few hundred damage events and refuse to produce numbers when no candidate
- * fits.
+ * Two shapes are supported, and they differ in where the numbers live:
  *
- * Two structural facts make this cheap and version-robust:
- *   1. The unit header is anchored at the START. The only variable is whether params[0] is the
- *      infoGUID, which shifts everything by exactly one field.
- *   2. The damage/heal suffix is anchored at the END, and its length is fixed per event type.
- *      A mid-line stat block (10 or 19 fields, depending on build) does not move a suffix that
- *      is counted from the end. This is precisely why the prototype's `spec - 1 - 19` arithmetic
- *      broke and why anchored counts do not.
+ *  1. "end" — the damage/heal payload is the last thing on the line (classic-era and retail
+ *     format-22 logs). A mid-line stat block, if present, pushes it but does not change its
+ *     length, so counting from the end is stable. `wowlog.py` got this wrong by mixing an
+ *     end-anchored payload with a start-anchored header.
+ *
+ *  2. "afterBlock" — the line carries a 19-field unit block (owner, health, power, position,
+ *     level) and the payload follows it, with a run of `nil` padding at the end. Counting from
+ *     the end lands on the padding, so the payload is located from the end of the block:
+ *
+ *       header(8) + spell(3) + block(19) + [amount, total, overkill, school, resisted,
+ *       blocked, absorbed, nil, nil, nil, ("ST")]
+ *
+ *     This is what `_forever_` logs do, verified against 64 MB of real logs (Nov 2026). The
+ *     amount is at +0 and the school at +3, confirmed by correlating consecutive hits on one
+ *     victim with its HP delta: 48-61% exact matches at that offset, ~0% at every other.
+ *
+ * Nothing is assumed: `calibrate` scores every candidate against sampled damage events and
+ * returns null when none fits, reporting the first mismatch for each.
  */
 import { at, flags, isGuid, isHexFlags, isZeroGuid, num } from './fields';
 
-export const DAMAGE_SUFFIX = [
-  'amount',
-  'overkill',
-  'school',
-  'resisted',
-  'blocked',
-  'absorbed',
-  'critical',
-  'glancing',
-  'crushing',
-  'isOffHand',
-] as const;
+export type SuffixMode = 'end' | 'afterBlock';
 
-export const HEAL_SUFFIX = ['amount', 'overhealing', 'absorbed', 'critical'] as const;
-
-export type DamageSuffixName = (typeof DAMAGE_SUFFIX)[number];
-export type HealSuffixName = (typeof HEAL_SUFFIX)[number];
+/** Events carrying the three-field spell prefix (id, name, school) before the payload. */
+export const SPELL_PREFIXED = new Set([
+  'SPELL_DAMAGE',
+  'SPELL_PERIODIC_DAMAGE',
+  'SPELL_HEAL',
+  'SPELL_PERIODIC_HEAL',
+  'SPELL_MISSED',
+  'SPELL_CAST_SUCCESS',
+  'SPELL_CAST_FAILED',
+  'SPELL_INTERRUPT',
+  'SPELL_AURA_APPLIED',
+  'SPELL_ABSORBED',
+  'DAMAGE_SHIELD',
+  'RANGE_DAMAGE',
+]);
 
 export const DAMAGE_EVENTS = new Set([
   'SPELL_DAMAGE',
   'SPELL_PERIODIC_DAMAGE',
   'SWING_DAMAGE',
+  'SWING_DAMAGE_LANDED',
   'RANGE_DAMAGE',
   'DAMAGE_SHIELD',
   'DAMAGE_SPLIT',
   'SPELL_BUILDING_DAMAGE',
+  'ENVIRONMENTAL_DAMAGE',
 ]);
 
 export const HEAL_EVENTS = new Set(['SPELL_HEAL', 'SPELL_PERIODIC_HEAL']);
+
+/** Payload offsets per anchor mode. `len` is only used when anchoring from the end. */
+export const TAIL = {
+  end: {
+    damage: { len: 10, amount: 0, overkill: 1, school: 2, absorbed: 5, critical: 6 },
+    heal: { len: 4, amount: 0, overheal: 1 },
+  },
+  afterBlock: {
+    damage: { len: 7, amount: 0, overkill: 2, school: 3, absorbed: 6, critical: 7 },
+    heal: { len: 5, amount: 0, overheal: 2 },
+  },
+} as const;
 
 export interface HeaderIndex {
   srcGuid: number;
@@ -78,7 +98,10 @@ export function headerIndex(infoGuid: boolean): HeaderIndex {
 
 export interface Layout {
   infoGuid: boolean;
-  /** unexpected fields appended after the known suffix (0 for every format seen so far) */
+  mode: SuffixMode;
+  /** afterBlock: fields between the spell prefix and the payload */
+  midBlock: number;
+  /** end: unexpected fields appended after the known payload */
   trailingExtra: number;
   score: number;
   samples: number;
@@ -88,32 +111,71 @@ export interface CandidateScore extends Layout {
   reason?: string;
 }
 
-function suffixValue(
-  params: string[],
-  suffixLength: number,
-  indexInSuffix: number,
-  trailingExtra: number,
-): string {
-  const end = params.length - 1 - trailingExtra;
-  return at(params, end - (suffixLength - 1 - indexInSuffix));
+/** ENVIRONMENTAL_DAMAGE puts the environmental type before its payload. */
+export function payloadShift(event: string): number {
+  return event === 'ENVIRONMENTAL_DAMAGE' ? 1 : 0;
 }
 
-export function damageField(
+/** Index of the first payload field for this event under this layout. */
+export function payloadStart(event: string, params: string[], layout: Layout): number {
+  if (layout.mode === 'afterBlock') {
+    const h = headerIndex(layout.infoGuid);
+    const spell = SPELL_PREFIXED.has(event) ? 3 : 0;
+    return h.payload + spell + layout.midBlock + payloadShift(event);
+  }
+  return params.length - layout.trailingExtra - TAIL.end.damage.len;
+}
+
+export function damageValue(
+  event: string,
   params: string[],
-  name: DamageSuffixName,
+  name: 'amount' | 'overkill' | 'school' | 'absorbed' | 'critical',
   layout: Layout,
 ): string {
-  return suffixValue(params, DAMAGE_SUFFIX.length, DAMAGE_SUFFIX.indexOf(name), layout.trailingExtra);
+  const spec = TAIL[layout.mode].damage;
+  const base =
+    layout.mode === 'afterBlock'
+      ? payloadStart(event, params, layout)
+      : params.length - layout.trailingExtra - TAIL.end.damage.len;
+  return at(params, base + spec[name]);
 }
 
-export function healField(params: string[], name: HealSuffixName, layout: Layout): string {
-  return suffixValue(params, HEAL_SUFFIX.length, HEAL_SUFFIX.indexOf(name), layout.trailingExtra);
+export function healValue(
+  event: string,
+  params: string[],
+  name: 'amount' | 'overheal',
+  layout: Layout,
+): string {
+  const spec = TAIL[layout.mode].heal;
+  const base =
+    layout.mode === 'afterBlock'
+      ? payloadStart(event, params, layout)
+      : params.length - layout.trailingExtra - TAIL.end.heal.len;
+  return at(params, base + spec[name]);
 }
 
-const CRIT_VALUES = new Set(['', 'nil', '0', '1', 'true', 'false']);
+/**
+ * Count the `nil` padding at the end of a payload. The block-anchored shape always ends in a run
+ * of them, which is what stops an end-anchored candidate from accidentally scoring on it.
+ */
+function trailingNilCount(params: string[], max = 4): number {
+  let n = 0;
+  for (let i = params.length - 1; i >= 0 && n < max; i--) {
+    const v = at(params, i);
+    if (v === 'nil') {
+      n++;
+      continue;
+    }
+    if (n === 0 && i === params.length - 1 && v.length > 0 && v.length <= 4 && num(v) === null) {
+      continue; // short trailing tag such as "ST"
+    }
+    break;
+  }
+  return n;
+}
 
 /** Does this damage event fit the given candidate layout? Returns null when it fits. */
-export function damageFits(params: string[], cand: Layout): string | null {
+export function damageFits(event: string, params: string[], cand: Layout): string | null {
   const h = headerIndex(cand.infoGuid);
   const srcGuid = at(params, h.srcGuid);
   const srcName = at(params, h.srcName);
@@ -124,20 +186,41 @@ export function damageFits(params: string[], cand: Layout): string | null {
   if (!isHexFlags(at(params, h.dstFlags))) return 'dstFlags is not a flag set';
   if (!isHexFlags(at(params, h.dstRaidFlags))) return 'dstRaidFlags is not a flag set';
 
-  const amount = num(damageField(params, 'amount', cand));
+  if (cand.mode === 'afterBlock' && trailingNilCount(params) < 2) {
+    return 'no nil padding at the end (not a block-anchored payload)';
+  }
+
+  const amount = num(damageValue(event, params, 'amount', cand));
   if (amount === null || amount < 0) return 'amount is not a non-negative integer';
-  const overkill = num(damageField(params, 'overkill', cand));
-  if (overkill === null || overkill < 0) return 'overkill is not a non-negative integer';
-  const school = num(damageField(params, 'school', cand));
-  if (school === null || school < 0 || school > 127) return 'school is not a school bitmask';
-  const crit = damageField(params, 'critical', cand);
-  if (!CRIT_VALUES.has(crit)) return 'critical is not a flag';
+  const overkill = num(damageValue(event, params, 'overkill', cand));
+  if (overkill === null || overkill < -1) return 'overkill is neither -1 nor a count';
+  const school = num(damageValue(event, params, 'school', cand));
+  if (school === null || school <= 0 || school > 127) return 'school is not a school bitmask';
+  if (cand.mode === 'end' && num(damageValue(event, params, 'absorbed', cand)) === null) {
+    return 'absorbed is not a number';
+  }
   return null;
 }
 
-export interface CalibrationInput {
-  /** already-split param arrays for candidate lines (params exclude the event name) */
-  samples: string[][];
+export const MIN_CALIBRATION_SAMPLES = 5;
+export const CONFIDENT_SAMPLES = 20;
+export const MIN_CALIBRATION_SCORE = 0.9;
+export const MIN_LOW_CONFIDENCE_SCORE = 0.95;
+
+function* candidateLayouts(): Generator<Layout> {
+  for (const infoGuid of [true, false]) {
+    for (const trailingExtra of [0, 1, 2]) {
+      yield { infoGuid, mode: 'end', midBlock: 0, trailingExtra, score: 0, samples: 0 };
+    }
+    for (const midBlock of [19, 10, 0]) {
+      yield { infoGuid, mode: 'afterBlock', midBlock, trailingExtra: 0, score: 0, samples: 0 };
+    }
+  }
+}
+
+export interface CalibrationSample {
+  event: string;
+  params: string[];
 }
 
 export interface Calibration {
@@ -147,36 +230,30 @@ export interface Calibration {
   reason?: string;
 }
 
-export const MIN_CALIBRATION_SAMPLES = 5;
-export const CONFIDENT_SAMPLES = 20;
-export const MIN_CALIBRATION_SCORE = 0.9;
-export const MIN_LOW_CONFIDENCE_SCORE = 0.95;
-
-export function calibrate(samples: string[][]): Calibration {
+export function calibrate(samples: CalibrationSample[]): Calibration {
   const candidates: CandidateScore[] = [];
-  for (const infoGuid of [true, false]) {
-    for (const trailingExtra of [0, 1, 2]) {
-      let hits = 0;
-      let reasons = new Map<string, number>();
-      for (const p of samples) {
-        const r = damageFits(p, { infoGuid, trailingExtra, score: 0, samples: 0 });
-        if (r === null) hits++;
-        else reasons.set(r, (reasons.get(r) ?? 0) + 1);
-      }
-      const topReason = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0];
-      candidates.push({
-        infoGuid,
-        trailingExtra,
-        score: samples.length === 0 ? 0 : hits / samples.length,
-        samples: samples.length,
-        ...(topReason ? { reason: topReason[0] } : {}),
-      });
+  for (const cand of candidateLayouts()) {
+    let hits = 0;
+    const reasons = new Map<string, number>();
+    for (const s of samples) {
+      const r = damageFits(s.event, s.params, cand);
+      if (r === null) hits++;
+      else reasons.set(r, (reasons.get(r) ?? 0) + 1);
     }
+    const top = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0];
+    candidates.push({
+      ...cand,
+      score: samples.length === 0 ? 0 : hits / samples.length,
+      samples: samples.length,
+      ...(top ? { reason: top[0] } : {}),
+    });
   }
-  candidates.sort((a, b) => b.score - a.score || a.trailingExtra - b.trailingExtra);
+  candidates.sort(
+    (a, b) => b.score - a.score || a.midBlock - b.midBlock || a.trailingExtra - b.trailingExtra,
+  );
   const best = candidates[0]!;
-  // A short log is allowed to calibrate on fewer samples, but only on a perfect score: five
-  // matching events with no outliers is evidence; five with a near-miss is not.
+  // A short log may calibrate on fewer samples, but only on a near-perfect score: five matching
+  // events with no outliers is evidence; five with a near-miss is not.
   const threshold = best.samples >= CONFIDENT_SAMPLES ? MIN_CALIBRATION_SCORE : MIN_LOW_CONFIDENCE_SCORE;
   const plausible = best.samples >= MIN_CALIBRATION_SAMPLES && best.score >= threshold;
   if (!plausible) {
@@ -192,6 +269,8 @@ export function calibrate(samples: string[][]): Calibration {
   return {
     layout: {
       infoGuid: best.infoGuid,
+      mode: best.mode,
+      midBlock: best.midBlock,
       trailingExtra: best.trailingExtra,
       score: best.score,
       samples: best.samples,

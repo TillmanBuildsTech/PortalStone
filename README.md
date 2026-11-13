@@ -19,23 +19,26 @@ contract; `privacy/` is the consent and contribution contract.
 
 ## Status
 
-Phase 0 is in progress: the parser is rewritten and tested; the agent, storage, and UI are not
-built yet.
+Phase 0 is done: the parser is rewritten, calibrated against real `_forever_` logs, and tested.
+The agent, storage and UI are not built yet.
 
     npm install
-    npm test                     # 28 tests
+    npm test                     # 32 tests
     npm run typecheck
 
     cd packages/core
-    npx tsx src/cli.ts make  /tmp/big.txt --mb 500 --layout adv19
+    npx tsx src/cli.ts make   /tmp/big.txt --mb 500          # default: forever shape
     npx tsx src/cli.ts report /tmp/big.txt
+    npx tsx src/cli.ts report "/path/to/WoWCombatLog-111226_172753.txt"
 
-`--layout` selects the log shape to generate: `adv19` (infoGUID + 19-field stat block), `adv10`,
-`plain` (no infoGUID), or `corrupt` (forces a calibration failure).
+`--layout` selects the log shape to generate: `forever` (no infoGUID, 19-field unit block,
+block-anchored payload), `adv19`, `adv10`, `plain`, or `corrupt` (forces a calibration failure).
 
 ## Why the parser calibrates instead of hard-coding offsets
 
-Field positions shift between log formats, with and without the infoGUID, and with or without the
-mid-line stat block. The reader therefore detects the header layout and anchors damage suffixes to
-the *end* of the field list, verifies the choice against a sample of damage events, and refuses to
-produce numbers when no layout fits — reporting which candidates failed and why.
+Field positions shift between log formats: with and without the infoGUID, with or without a
+mid-line stat block, and with the payload either last on the line (classic/retail) or after a
+19-field unit block followed by `nil` padding (`_forever_`). The reader therefore detects the
+header shape, locates the payload by the anchor that matches, verifies the choice against sampled
+damage events, and refuses to produce numbers when no candidate fits — reporting which candidates
+failed and why.

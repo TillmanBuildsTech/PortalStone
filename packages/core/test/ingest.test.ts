@@ -112,7 +112,7 @@ describe('ingest — refuses rather than lying', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toBe('layout_unknown');
-    expect(res.candidates).toHaveLength(6);
+    expect(res.candidates).toHaveLength(12); // 2 header shapes x (3 end-anchored + 3 block-anchored)
     expect(Math.max(...res.candidates.map((c) => c.score))).toBe(0);
     expect(res.detail).toMatch(/matched 0% of/);
   });
@@ -124,6 +124,49 @@ describe('ingest — refuses rather than lying', () => {
     if (res.ok) return;
     expect(res.reason).toBe('no_damage_events');
   });
+});
+
+describe('ingest — forever shape (payload after a 19-field unit block)', () => {
+  const F: MakeLogOptions = { ...BASE, format: 'forever', swingDamage: [500, 700], swingEvents: 'both' };
+
+  it('calibrates to the block layout and reads the same totals', async () => {
+    const path = file('forever.txt', makeLog(F));
+    const res = await ingest({ path });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.layout.mode).toBe('afterBlock');
+    expect(res.layout.midBlock).toBe(19);
+    expect(res.infoGuid).toBe(false);
+    expect(res.unparsed).toBe(0);
+
+    const enc = res.sessions[0]!.encounters[0]!;
+    expect(enc.damageDone).toBe(22200); // 21000 from spells + 1200 from swings, each counted once
+    expect(enc.damageTaken).toBe(1200);
+    expect(enc.casts).toBe(3);
+    expect(enc.interrupts).toBe(2);
+    expect(enc.kills).toBe(1);
+    expect(enc.myDeaths).toBe(1);
+  });
+
+  for (const mode of ['both', 'roll', 'landed'] as const) {
+    it(`counts each swing once when swingEvents=${mode}`, async () => {
+      const path = file(
+        `swings-${mode}.txt`,
+        makeLog({
+          format: 'forever',
+          header: false,
+          zone: null,
+          encounter: null,
+          swingDamage: [100, 200, 300, 400, 500, 600],
+          swingEvents: mode,
+        }),
+      );
+      const res = await ingest({ path });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(totalDamage(res)).toBe(2100);
+    });
+  }
 });
 
 describe('ingest — incremental tailing', () => {

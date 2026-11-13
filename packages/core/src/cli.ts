@@ -39,21 +39,37 @@ async function main(): Promise<void> {
     const out = process.argv[3];
     if (!out) throw new Error('make requires an output path');
     const mb = Number(arg('mb', '10'));
-    const layout = arg('layout', 'adv19');
-    const opts: MakeLogOptions = {
-      infoGuid: layout !== 'plain',
-      statBlock: layout === 'adv19' ? 19 : layout === 'adv10' ? 10 : 0,
-      corruptFlags: layout === 'corrupt',
-      zone: { id: 1456, name: 'Orgrimmar' },
-      encounter: { id: 1234, name: 'Ragnaros', difficulty: 4, size: 20, success: true },
-      playerDamage: [12000, 13500, 11000, 14200, 12800, 11900, 15100, 13300],
-      bossDamage: [2600, 2800, 2400],
-      casts: 6,
-      interrupts: 2,
-      misses: ['DODGE', 'MISS'],
-      mobKills: 2,
-      playerDeath: true,
-    };
+    const layout = arg('layout', 'forever');
+    const opts: MakeLogOptions =
+      layout === 'forever'
+        ? {
+            format: 'forever',
+            swingDamage: [400, 450],
+            swingEvents: 'both',
+            zone: { id: 1456, name: 'Orgrimmar' },
+            encounter: { id: 1234, name: 'Ragnaros', difficulty: 4, size: 20, success: true },
+            playerDamage: [12000, 13500, 11000, 14200, 12800, 11900, 15100, 13300],
+            bossDamage: [2600, 2800, 2400],
+            casts: 6,
+            interrupts: 2,
+            misses: ['DODGE', 'MISS'],
+            mobKills: 2,
+            playerDeath: true,
+          }
+        : {
+            infoGuid: layout !== 'plain',
+            statBlock: layout === 'adv19' ? 19 : layout === 'adv10' ? 10 : 0,
+            corruptFlags: layout === 'corrupt',
+            zone: { id: 1456, name: 'Orgrimmar' },
+            encounter: { id: 1234, name: 'Ragnaros', difficulty: 4, size: 20, success: true },
+            playerDamage: [12000, 13500, 11000, 14200, 12800, 11900, 15100, 13300],
+            bossDamage: [2600, 2800, 2400],
+            casts: 6,
+            interrupts: 2,
+            misses: ['DODGE', 'MISS'],
+            mobKills: 2,
+            playerDeath: true,
+          };
     const one = makeLog(opts);
     const target = Math.max(mb, 1) * 1024 * 1024;
     const fd = openSync(out, 'w');

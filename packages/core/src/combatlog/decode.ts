@@ -10,9 +10,10 @@ import { at, flags, isGuid, isZeroGuid, num, unquote } from './fields';
 import {
   DAMAGE_EVENTS,
   HEAL_EVENTS,
-  damageField,
-  healField,
+  damageValue,
+  healValue,
   headerIndex,
+  payloadStart,
   type Layout,
 } from './layout';
 
@@ -42,6 +43,8 @@ export type LogEvent =
       amount: number;
       absorbed: number;
       isCrit: boolean;
+      /** Forever logs emit the same swing twice: a roll and a landed event. */
+      swing?: 'roll' | 'landed';
     }
   | {
       t: 'heal';
@@ -67,6 +70,7 @@ export type LogEvent =
       t: 'cast';
       ms: number;
       srcGuid: string;
+      srcName: string;
       srcFlags: number;
       spellId: number;
       spellName: string;
@@ -84,7 +88,42 @@ export type LogEvent =
     }
   | { t: 'unknown'; ms: number; event: string };
 
-const MISS_EVENTS = new Set(['SPELL_MISSED', 'SWING_MISSED', 'RANGE_MISSED']);
+const MISS_EVENTS = new Set(['SPELL_MISSED', 'SWING_MISSED', 'RANGE_MISSED', 'SPELL_PERIODIC_MISSED']);
+
+/**
+ * Events we decode nothing from but must not report as unrecognised: auras, cast starts, map
+ * changes and the like make up more than half the lines in a leveling log, and counting them as
+ * "unknown" would hide a real format change in the noise.
+ */
+const IGNORED_EVENTS = new Set([
+  'SPELL_AURA_APPLIED',
+  'SPELL_AURA_APPLIED_DOSE',
+  'SPELL_AURA_REMOVED',
+  'SPELL_AURA_REMOVED_DOSE',
+  'SPELL_AURA_REFRESH',
+  'SPELL_AURA_BROKEN',
+  'SPELL_CAST_START',
+  'SPELL_CREATE',
+  'SPELL_SUMMON',
+  'SPELL_ENERGIZE',
+  'SPELL_PERIODIC_ENERGIZE',
+  'SPELL_DISPEL',
+  'SPELL_DISPEL_FAILED',
+  'SPELL_STOLEN',
+  'DAMAGE_SHIELD_MISSED',
+  'SPELL_ABSORBED',
+  'SPELL_MISSED_DAMAGE',
+  'SPELL_AURA_BROKEN_SPELL',
+  'SPELL_EXTRA_ATTACKS',
+  'SPELL_DRAIN',
+  'SPELL_RESURRECT',
+  'SPELL_INSTAKILL',
+  'MAP_CHANGE',
+  'ZONE_CHANGE_START',
+  'ENCHANT_APPLIED',
+  'ENCHANT_REMOVED',
+  'PARTY_MEMBER_DIED',
+]);
 
 export interface DecodeResult {
   event: LogEvent | null;
@@ -185,14 +224,20 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
   }
 
   if (event.endsWith('_SUPPORT')) return { event: null, skipped: true };
+  if (IGNORED_EVENTS.has(event)) return { event: null, skipped: true };
 
   if (DAMAGE_EVENTS.has(event)) {
     const h = headerIndex(layout.infoGuid);
-    const amount = num(damageField(params, 'amount', layout)) ?? 0;
-    const absorbed = num(damageField(params, 'absorbed', layout)) ?? 0;
+    const amount = num(damageValue(event, params, 'amount', layout)) ?? 0;
+    const absorbed = num(damageValue(event, params, 'absorbed', layout)) ?? 0;
     const isSwing = event.startsWith('SWING_');
-    const spellId = isSwing ? 0 : (num(at(params, h.payload)) ?? 0);
-    const spellName = isSwing ? 'Melee' : unquote(at(params, h.payload + 1)) || 'unknown';
+    const isEnv = event === 'ENVIRONMENTAL_DAMAGE';
+    const spellId = isSwing || isEnv ? 0 : (num(at(params, h.payload)) ?? 0);
+    const spellName = isSwing
+      ? 'Melee'
+      : isEnv
+        ? unquote(at(params, payloadStart(event, params, layout))) || 'Environment'
+        : unquote(at(params, h.payload + 1)) || 'unknown';
     return {
       event: {
         t: 'damage',
@@ -207,7 +252,12 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
         spellName,
         amount,
         absorbed,
-        isCrit: damageField(params, 'critical', layout) === '1',
+        isCrit: (() => {
+          const c = damageValue(event, params, 'critical', layout);
+          return c === '1' || c === 'true';
+        })(),
+        ...(event === 'SWING_DAMAGE' ? { swing: 'roll' as const } : {}),
+        ...(event === 'SWING_DAMAGE_LANDED' ? { swing: 'landed' as const } : {}),
       },
     };
   }
@@ -223,8 +273,8 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
         dstGuid: at(params, h.dstGuid),
         dstFlags: flags(at(params, h.dstFlags)),
         spellName: unquote(at(params, h.payload + 1)) || 'unknown',
-        amount: num(healField(params, 'amount', layout)) ?? 0,
-        overheal: num(healField(params, 'overhealing', layout)) ?? 0,
+        amount: num(healValue(event, params, 'amount', layout)) ?? 0,
+        overheal: num(healValue(event, params, 'overheal', layout)) ?? 0,
       },
     };
   }
@@ -251,6 +301,7 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
         t: 'cast',
         ms,
         srcGuid: at(params, h.srcGuid),
+        srcName: unquote(at(params, h.srcName)),
         srcFlags: flags(at(params, h.srcFlags)),
         spellId: num(at(params, h.payload)) ?? 0,
         spellName: unquote(at(params, h.payload + 1)) || 'unknown',

@@ -13,6 +13,8 @@
 import type { LogEvent } from './decode';
 import { FLAG } from './fields';
 
+type DamageEvent = Extract<LogEvent, { t: 'damage' }>;
+
 export interface AbilityStat {
   id: number;
   name: string;
@@ -276,6 +278,48 @@ export class Aggregator {
     this.selfName = name;
   }
 
+  /**
+   * Unmatched swing rolls, held for a moment so a landed twin can cancel them. Forever logs emit
+   * both events for the same swing; counting both inflates autoattack damage by roughly 50%.
+   */
+  private readonly pendingSwings: DamageEvent[] = [];
+  private readonly swingWindowMs = 300;
+
+  private applyDamage(ev: DamageEvent, ms: number): void {
+    const s = this.ensureSession(ms);
+    const bag = this.enc ? this.enc.bag : s.open;
+    const mineSrc = this.isMine(ev.srcFlags, ev.srcGuid);
+    this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
+    if (mineSrc && ev.amount > 0) {
+      bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
+      bag.markActivity(ms);
+      this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.spellName });
+    }
+    if (this.isMine(ev.dstFlags, ev.dstGuid) && ev.amount > 0) {
+      bag.addTaken(ev.spellId, ev.spellName, ev.amount);
+    }
+    if (!mineSrc && ev.amount > 0) {
+      this.lastHitBy.set(ev.dstGuid, { mine: false, name: ev.spellName });
+    }
+  }
+
+  private dropPendingMatch(landed: DamageEvent): void {
+    const i = this.pendingSwings.findIndex(
+      (p) =>
+        p.srcGuid === landed.srcGuid &&
+        p.dstGuid === landed.dstGuid &&
+        Math.abs(p.ms - landed.ms) <= this.swingWindowMs,
+    );
+    if (i >= 0) this.pendingSwings.splice(i, 1);
+  }
+
+  private flushOldSwings(nowMs: number): void {
+    while (this.pendingSwings.length > 0 && nowMs - this.pendingSwings[0]!.ms > this.swingWindowMs) {
+      const ev = this.pendingSwings.shift()!;
+      this.applyDamage(ev, ev.ms);
+    }
+  }
+
   push(ev: LogEvent, offsetMin: number): void {
     if (ev.t === 'version') {
       if (ev.advanced !== null) this.advanced = ev.advanced;
@@ -292,14 +336,16 @@ export class Aggregator {
     if (ms) {
       if (!this.firstMs) this.firstMs = ms;
       if (ms > this.lastMs) this.lastMs = ms;
+      this.flushOldSwings(ms);
     }
 
     if (ev.t === 'zone') {
       if (ev.zoneName) this.zoneName = ev.zoneName;
       if (ev.zoneId !== null) this.zoneId = ev.zoneId;
-      // A zone change starts a fresh activity window even if the player idles in between.
+      // A zone change does not end a play session: this player crossed 99 zones in one evening.
+      // It does end an encounter, which cannot legitimately span a zone boundary.
       this.closeEncounter(null, ms);
-      this.cur = null;
+      if (this.cur) this.cur.zoneName = this.zoneName;
       return;
     }
 
@@ -340,17 +386,14 @@ export class Aggregator {
 
     switch (ev.t) {
       case 'damage': {
-        const mineSrc = this.isMine(ev.srcFlags, ev.srcGuid);
-        this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
-        if (mineSrc && ev.amount > 0) {
-          bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
-          bag.markActivity(ms);
-          this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.spellName });
+        // Forever emits the same swing twice (a roll and a landed event). Rolls are held until
+        // we know whether a landed twin arrives, otherwise every autoattack would count twice.
+        if (ev.swing === 'roll') {
+          this.pendingSwings.push(ev);
+          return;
         }
-        if (this.isMine(ev.dstFlags, ev.dstGuid) && ev.amount > 0) {
-          bag.addTaken(ev.spellId, ev.spellName, ev.amount);
-        }
-        if (!mineSrc && ev.amount > 0) this.lastHitBy.set(ev.dstGuid, { mine: false, name: ev.spellName });
+        if (ev.swing === 'landed') this.dropPendingMatch(ev);
+        this.applyDamage(ev, ms);
         return;
       }
       case 'heal': {
@@ -372,7 +415,7 @@ export class Aggregator {
           bag.casts++;
           bag.markActivity(ms);
         }
-        this.noteSelf(ev.srcGuid, '', ev.srcFlags);
+        this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
         return;
       }
       case 'castFailed': {
@@ -413,6 +456,10 @@ export class Aggregator {
   }
 
   finish(): { sessions: SessionResult[] } {
+    while (this.pendingSwings.length > 0) {
+      const ev = this.pendingSwings.shift()!;
+      this.applyDamage(ev, ev.ms);
+    }
     this.closeEncounter(null, this.lastMs);
     if (this.cur && this.lastMs > this.cur.startMs) this.cur.endMs = this.lastMs;
     return { sessions: this.sessions };

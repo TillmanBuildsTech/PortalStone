@@ -403,8 +403,83 @@ End-to-end throughput is ~390k lines/s, not the 1.8 M/s scan floor in §1: per-l
 rollup dominates. Still 8× Python and 4× inside the P0 target (500 MB in under 10 s); a 1 GB raid
 night ingests in ~13 s.
 
-**Still blocked on a real Forever log:** layout confirmation, whether Forever keeps the 19-field
-stat block, whether `UNIT_DIED` puts the victim in the source block (assumed, true in every
-format seen), and whether `ENCOUNTER_*` carries an infoGUID. The first 2 MB of any Forever
-`WoWCombatLog.txt` settles all four.
+**Resolved against a real Forever log** (D:\Blizzard\World of Warcraft\_forever_\Logs, 61.5 MB,
+Nov 2026): the layout is `afterBlock` with a 19-field unit block, no infoGUID. See §12 for the
+measured shape and what it changes about the provider list.
 
+
+---
+
+## 12. The Forever format, measured from a real log
+
+Source: `D:\Blizzard\World of Warcraft\_forever_\Logs\WoWCombatLog-111226_172753.txt`
+(61.5 MB, 256,296 lines, BUILD_VERSION 1.60.1, PROJECT_ID 18, advanced logging on). Read-only:
+every analysis ran against a copy outside the game directory.
+
+### 12.1 Line shape
+
+    header(8) + [spell(3)] + unit block(19) + payload
+
+- **No infoGUID.** The first field after the event name is the source GUID.
+- **Unit block, 19 fields**, present on damage, heal, cast and *missed* events:
+  `ownerGUID, unknown, health, maxHealth, attackPower, ?, spellPower, ?, ?, ?, ?, currentPower,
+  maxPower, ?, x, y, mapId, facing, level`. The block describes the **destination** on spell
+  damage and the **source** on swings — do not rely on it for identity, only for reading numbers.
+- **Payload after the block**, with `nil` padding at the end:
+  `amount, total, overkill(-1 when none), school, resisted, blocked, absorbed, nil, nil, nil`
+  and a trailing `ST` tag on spell-prefixed damage. Heals:
+  `amount, total, overheal, absorbed, nil`.
+- `ENVIRONMENTAL_DAMAGE` puts the environmental type (`Falling`, …) before the payload, so its
+  amount is one field later.
+- `UNIT_DIED` puts the victim in the **destination** block when the source is the zero GUID.
+  `PARTY_KILL` carries both sides normally.
+
+Field offsets were derived empirically, not guessed: for consecutive hits on the same victim, the
+victim's HP from the block drops by exactly the amount, and the candidate offset that matched was
+the payload's first field (48–61% exact matches against 13,813 pairs; every other offset ~0%).
+
+### 12.2 The swing double-emission problem
+
+Forever emits **both** `SWING_DAMAGE` (16,388 lines) and `SWING_DAMAGE_LANDED` (17,047 lines), and
+11,184 of them share the same timestamp, source, destination and amount. Counting both inflates
+autoattack damage by ~50%. The parser therefore holds each swing roll for 300 ms and drops it if a
+landed twin for the same source/destination arrives (or commits it if none does), so a log with
+only one of the two event names still counts every hit.
+
+Verified end to end: damage attributed to the player's units totals **232,358**, which matches an
+independent Python implementation over the same bytes exactly — including the dedupe
+(155,366 from spells/specials + 76,992 from swings, counted once).
+
+### 12.3 What the log says about the player, and about the product
+
+Over 8 hours of play: 232,358 damage done, 82,038 taken, 212 kills, 46 deaths, 1,870 casts,
+88 activity sessions, and **zero `ENCOUNTER_*` lines** — this is a leveling log, not a raid log.
+`ENCOUNTER_START/END` has still never been observed on Forever, so the encounter grain remains
+untested against real data (the synthetic fixtures cover its shape).
+
+Parsing cost: 61.5 MB in 752 ms (82 MB/s, 343k lines/s), 0 unparsed, 62 unrecognised lines
+(0.02%, all rare events now classified).
+
+### 12.4 Provider consequences (spec §3 needs an amendment)
+
+SavedVariables present on this account (`_forever_/WTF/Account/LANC3RR1`):
+
+| File | Size | Capability | Note |
+| --- | --- | --- | --- |
+| `Attune.lua` | 232 KB | `progression.attunement`, `roster.levels` | **third-party roster data** — privacy §9 applies |
+| `RareScanner.lua` | 215 KB | `rare.spawns` | |
+| `Questie.lua` | 53 KB | `quest.completion` | |
+| `QuestieTrace.lua` | 48 KB | `world.mapdata` | |
+| `BagBrother.lua` | 4.4 KB | `character.money`, `character.inventory` | |
+| `Blizzard_AuctionHouseUI.lua` | 2.4 KB | `auction.prices` (candidate) | zero-addon provider worth probing |
+| `AtlasLootContinued.lua` | 707 B | `world.loottables` | |
+| `DBM-Core.lua`, `Plater.lua`, `HealBot.lua` | 16–251 KB | — | no decoded capability yet |
+
+**There is no Details! on Forever.** The richest third-party combat source on retail simply is not
+in the ecosystem here, so the combat log is the *only* combat source — which strengthens the
+"zero addons must still work" principle: on Forever there is no alternative meter to fall back on,
+and no third-party data holding damage history that would make ours redundant.
+
+Also: `Plater` at 251 KB is the largest file and carries none of the capabilities in the registry,
+and `QuestieTrace` is listed in the registry but the spec's v1 five-adapter cap should be spent on
+`combatlog.files`, `sv.attune`, `sv.rarescan`, `sv.questie`, `sv.bagbrother` for this flavor.

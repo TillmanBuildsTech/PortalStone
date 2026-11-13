@@ -10,7 +10,14 @@ import { createReadStream } from 'node:fs';
 import { Aggregator, type BagSnapshot, type SessionResult } from './aggregate';
 import { decode } from './decode';
 import { splitFields } from './fields';
-import { CONFIDENT_SAMPLES, DAMAGE_EVENTS, calibrate, type Calibration, type Layout } from './layout';
+import {
+  CONFIDENT_SAMPLES,
+  DAMAGE_EVENTS,
+  calibrate,
+  type Calibration,
+  type CalibrationSample,
+  type Layout,
+} from './layout';
 import { parseTimestamp, splitTimestamp, yearFromFilename } from './timestamp';
 
 export interface IngestOptions {
@@ -166,10 +173,10 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
   let partialTail = false;
 
   const buffered: RawLine[] = [];
-  const sampleParams: string[][] = [];
+  const samples: CalibrationSample[] = [];
 
   const tryCalibrate = (): Calibration => {
-    const c = calibrate(sampleParams);
+    const c = calibrate(samples);
     calibration = c;
     return c;
   };
@@ -214,9 +221,9 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
 
     if (!layout) {
       buffered.push(raw);
-      if (DAMAGE_EVENTS.has(event)) sampleParams.push(params);
+      if (DAMAGE_EVENTS.has(event)) samples.push({ event, params });
       const windowFull = buffered.length >= maxCalibrationLines;
-      const enoughSamples = sampleParams.length >= calibrationSamples;
+      const enoughSamples = samples.length >= calibrationSamples;
       if (windowFull || enoughSamples) {
         const c = tryCalibrate();
         if (c.layout) {
@@ -249,7 +256,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
   }
 
   if (!layout) {
-    if (sampleParams.length === 0) {
+    if (samples.length === 0) {
       return {
         ok: false,
         path,
