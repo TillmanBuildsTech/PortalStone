@@ -1,0 +1,17 @@
+{
+  "name": "portalstone",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm -w @portalstone/core test",
+    "typecheck": "npm -w @portalstone/core run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

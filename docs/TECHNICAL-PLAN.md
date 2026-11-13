@@ -357,17 +357,54 @@ Own sensor addon, signing + auto-update, opt-in crash reports, multi-user/guild 
 
 ---
 
-## 10. Decisions I need from you
+## 10. Decisions — answered 13 Nov 2026
 
-1. **Install acceptable?** If the answer must be "open a website and nothing else", the product is
-   a log-drop analyser with no history and no addon data — a smaller, weaker product. Confirm the
-   local agent is acceptable and the browser is the interface.
-2. **v1 flavor:** Classic Era only (what you actually play, and what the install here shows), or
-   `forever` too? Each flavor doubles the golden-file matrix.
-3. **Rust or not.** My recommendation is no for v1 — the throughput argument doesn't hold at this
-   scale, and TS keeps one parser for browser + agent. Say so if you'd rather pay that cost now.
-4. **Time budget** for P0+P1. If it's two weekends, cut P1 to the log-only report and defer all
-   addon providers.
+1. **Install acceptable — yes.** Local agent confirmed. The website is a first-class surface for
+   hosted stats (price history, benchmarks, character/profile pages), not merely a funnel: it is
+   the only place cross-install numbers can exist without breaking the local-first promise.
+2. **v1 flavor: `forever` only.** Classic Era / retail adapters are deferred. This affects the
+   golden-file matrix (one flavor to validate, not four) but it also means **P0 cannot be finished
+   without a real Forever log sample** — no Forever client is installed on this machine, and the
+   format has not been observed. Everything below is built to calibrate rather than assume; the
+   first real sample either confirms the layout or is added as a descriptor.
+3. **Rust: no for v1.** Not decided explicitly, but the measured gap does not justify it (see §11).
+   Revisit only if live in-browser tailing via WASM becomes a headline feature.
+4. **Time budget:** unknown; P0 was scoped to two days of work and is done.
 
-Answer 1 and 2 and I'll start on P0 immediately: git, the new parser module, golden files, and a
-real 500 MB ingest test.
+---
+
+## 11. P0 status — parser rewritten, measured 13 Nov 2026
+
+`packages/core/` replaces `wowlog.py` as the product parser. 28 tests, typecheck clean, no
+`any` in the public surface.
+
+What changed, against the defects in §1:
+
+| Defect | Now |
+| --- | --- |
+| header/suffix read under contradictory assumptions | header anchored at the start (infoGUID detected), damage/heal suffix anchored at the **end**, so mid-line stat blocks cannot shift it |
+| `me=None`, every number zero on a real log | attribution by `AFFILIATION_MINE` flag (pets included), explicit `selfGuids` override |
+| boss names read as encounter ids | `ENCOUNTER_*` decoded by shape, name from the name field |
+| `damage_taken` structurally 0 | destination unit read from the calibrated header |
+| `FALLBACK_YEAR` constant, offset discarded | year from the rotated filename, epoch ms + offset retained |
+| zero rows on a shape change | calibration failure returns `layout_unknown` with the six candidates and their first mismatch |
+| no tests | 28, including a regression guard that `damageTaken > 0` and one that the original `tests_fixture.txt` is rejected as internally inconsistent (70/30 mix of two shapes) |
+
+Measured on this machine, 500 MB / 2.5 M lines:
+
+| | result |
+| --- | --- |
+| infoGUID + 19-field stat block | 6.4 s, 78 MB/s, 389k lines/s, 0 unparsed, correct totals |
+| no infoGUID, no stat block | 7.9 s, 63 MB/s, 425k lines/s, correct totals |
+| `wowlog.py` on the same bytes | `you=None`, 0 sessions, damage 0 |
+| original `tests_fixture.txt` | rejected: `best candidate matched 70% of 77 damage events; first mismatch: srcGuid is not a guid` |
+
+End-to-end throughput is ~390k lines/s, not the 1.8 M/s scan floor in §1: per-line decode plus
+rollup dominates. Still 8× Python and 4× inside the P0 target (500 MB in under 10 s); a 1 GB raid
+night ingests in ~13 s.
+
+**Still blocked on a real Forever log:** layout confirmation, whether Forever keeps the 19-field
+stat block, whether `UNIT_DIED` puts the victim in the source block (assumed, true in every
+format seen), and whether `ENCOUNTER_*` carries an infoGUID. The first 2 MB of any Forever
+`WoWCombatLog.txt` settles all four.
+
