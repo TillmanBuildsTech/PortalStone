@@ -89,8 +89,8 @@ export async function scan(
           // a rotated file with no combat in it: drop anything stored for this path
           store.replaceSessionsFrom(file.path, 0, [], character);
         }
-        // Camps are rebuilt per file: a bag is only meaningful next to the log it came from.
-        store.replaceCamps(file.path, res.camps);
+        // Bag drops are rebuilt per file: a drop only means anything next to the log it came from.
+        store.replaceBagDrops(file.path, res.bagDrops);
 
         const last = res.sessions[res.sessions.length - 1];
         const nextOffset = last ? last.startByte : res.endOffset;

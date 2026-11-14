@@ -20,7 +20,7 @@ import {
 } from './layout';
 import { parseTimestamp, splitTimestamp, yearFromFilename } from './timestamp';
 import { zoneKind } from '../zones';
-import type { CampResult } from '../camps';
+import type { BagDrop } from '../bags';
 
 export interface IngestOptions {
   path: string;
@@ -100,8 +100,8 @@ export interface IngestOk {
   partialTail: boolean;
   elapsedMs: number;
   sessions: SessionSnapshot[];
-  /** sleeping-bag camps: who unrolled a bag, and who got buffed in it */
-  camps: CampResult[];
+  /** sleeping bags: every "Unroll Bag" cast, newest last */
+  bagDrops: BagDrop[];
   warnings: string[];
 }
 
@@ -362,7 +362,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
     partialTail,
     elapsedMs: Date.now() - t0,
     sessions: agg.sessions.map(snapshotSession),
-    camps: agg.camps.finish(),
+    bagDrops: agg.bagDrops.finish(),
     warnings,
   };
 }

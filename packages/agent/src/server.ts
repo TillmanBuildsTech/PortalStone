@@ -82,64 +82,57 @@ function kindPill(kind: string): string {
 }
 
 /**
- * Camps: a bag on the ground is a place and a time. The buffs a bag hands out are self-applied and
- * carry no position, so attendance is reconstructed — and the two grades are shown differently
- * because one is measured and the other is only a coincidence in time.
+ * Bag drops. One row per "Unroll Bag" cast: who, when, where.
+ *
+ * This page shows nothing inferred. The camp buffs a bag hands out are applied per player with no
+ * link to the bag, so "who shared it" is not knowable from a combat log — only the drops are.
  */
-function renderCamps(store: Store, lastScan: ServerOptions['lastScan']): string {
-  const camps = store.recentCamps(60);
+function renderBags(store: Store, lastScan: ServerOptions['lastScan']): string {
+  const drops = store.bagDrops(300);
+  const stats = store.bagDropStats();
   const last = lastScan();
-  const mine = camps.filter((c) => c.my_bags > 0).length;
 
-  const block = (c: (typeof camps)[number]): string => {
-    const at = new Date(c.start_ms);
-    const bags = (c.bags ?? [])
-      .map((b) => (b.mine ? `<strong>${esc(b.name ?? 'you')}</strong> (yours)` : esc(b.name ?? 'unknown')))
-      .join(' · ');
-    const all = c.attendees ?? [];
-    const measured = all
-      .filter((a) => a.basis === 'measured' && a.distance_y !== null)
-      .sort((a, b) => a.distance_y! - b.distance_y!);
-    const inferred = all.length - measured.length;
-    const attendees = measured.map((a) => {
-      const label = a.mine ? `<strong>${esc(a.name ?? 'you')}</strong>` : esc(a.name ?? 'unknown');
-      return `<li>${label} — ${a.distance_y!.toFixed(1)}y</li>`;
-    });
-    return `<div class="card">
-      <div><strong>${at.toLocaleDateString()} ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong>
-        · ${esc(c.zone_name || 'unknown zone')}
-        · ${c.bag_count} bag${c.bag_count === 1 ? '' : 's'}${c.my_bags ? ' <span class="pill">yours</span>' : ''}</div>
-      <div class="sub" style="margin:4px 0 6px">bags down: ${bags || '—'}</div>
-      ${
-        attendees.length > 0
-          ? `<div class="sub">in the bag:</div><ul style="margin:4px 0 0 0">${attendees.join('')}</ul>`
-          : '<div class="sub">nobody confirmed inside the radius</div>'
-      }
-      ${
-        inferred > 0
-          ? `<div class="sub" style="margin-top:4px">+${inferred} other${inferred === 1 ? '' : 's'} took the camp buff here with no position on record</div>`
-          : ''
-      }
-    </div>`;
-  };
+  const rows = drops
+    .map(
+      (d) => `<tr>
+        <td>${when(d.ts_ms)}</td>
+        <td>${d.mine ? `<strong>${esc(d.name ?? 'you')}</strong>` : esc(d.name ?? 'unknown')}</td>
+        <td>${esc(d.zone_name || '—')}</td>
+        <td class="sub" style="text-align:right">${d.x === null || d.y === null ? '—' : `${d.x.toFixed(0)}, ${d.y.toFixed(0)}`}</td>
+      </tr>`,
+    )
+    .join('');
+
+  const people = stats.droppers
+    .map((p) => `<li>${p.mine ? `<strong>${esc(p.name)}</strong> (you)` : esc(p.name)} — ${p.count}</li>`)
+    .join('');
+  const zones = stats.zones.map((z) => `<li>${esc(z.zone_name)} — ${z.count}</li>`).join('');
 
   return page(
-    'Camps',
-    `<h1>Camps</h1>
-     <div class="sub">${camps.length} camp${camps.length === 1 ? '' : 's'} · ${mine} with one of your bags ·
+    'Bags',
+    `<h1>Bags</h1>
+     <div class="sub">${stats.total} drop${stats.total === 1 ? '' : 's'} · ${stats.mine} yours ·
+       ${stats.droppers.length} player${stats.droppers.length === 1 ? '' : 's'} ·
        last scan ${last.at ? new Date(last.at).toLocaleTimeString() : 'never'} ·
        <a href="/">sessions</a> · <a href="/runs">runs</a> · <a href="/diagnostics">diagnostics</a></div>
      ${
-       camps.length === 0
-         ? `<div class="notice">No sleeping-bag camps recorded yet. Unroll a bag in game and the next
-            scan will pick it up.</div>`
-         : camps.map(block).join('')
+       stats.total === 0
+         ? `<div class="notice">No bag drops recorded yet. Unroll a bag in game and the next scan
+            will pick it up.</div>`
+         : `<div class="row" style="margin-top:16px">
+              <div style="flex:1;min-width:240px"><h2 style="margin-top:6px">who drops bags</h2>
+                <ul style="margin:4px 0 0 0">${people}</ul></div>
+              <div style="flex:1;min-width:240px"><h2 style="margin-top:6px">where</h2>
+                <ul style="margin:4px 0 0 0">${zones}</ul></div>
+            </div>
+            <h2>every drop</h2>
+            <table><thead><tr><th>when</th><th>who</th><th>zone</th><th>position</th></tr></thead>
+            <tbody>${rows}</tbody></table>`
      }
      <div class="sub" style="margin-top:14px">
-       A camp is a bag on the ground and the minutes after it. Distances are measured from the
-       position block on cast and damage lines; "inferred" means the player took the camp buff
-       while this was the only camp around, but never emitted an event to place them — the log
-       cannot tell you where a player who is lying still actually stood.
+       A drop is the "Unroll Bag" cast: the only sleeping-bag event in the log. The buffs a bag gives
+       (Well-Rested, Camp Benefits, Boosted Rest) are applied to each player by themselves and never
+       name the bag that caused them, so who shared a bag is not recorded and is not guessed at here.
      </div>`,
     { refresh: 30 },
   );
@@ -169,7 +162,7 @@ function renderRuns(store: Store, lastScan: ServerOptions['lastScan']): string {
     `<h1>Runs</h1>
      <div class="sub">${runs.length} zone visits · ${instances} in instances ·
        last scan ${last.at ? new Date(last.at).toLocaleTimeString() : 'never'} ·
-       <a href="/">sessions</a> · <a href="/runs">runs</a> · <a href="/camps">camps</a> ·
+       <a href="/">sessions</a> · <a href="/runs">runs</a> · <a href="/bags">bags</a> ·
        <a href="/diagnostics">diagnostics</a></div>
      ${
        runs.length === 0
@@ -274,7 +267,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
     <div class="sub">${sessions.length} session${sessions.length === 1 ? '' : 's'} ·
       last scan ${last.at ? new Date(last.at).toLocaleTimeString() : 'never'}
       ${last.errors ? `· <span class="pill bad">${last.errors} log error</span>` : ''}
-      · <a href="/runs">runs</a> · <a href="/camps">camps</a> · <a href="/diagnostics">diagnostics</a></div>
+      · <a href="/runs">runs</a> · <a href="/bags">bags</a> · <a href="/diagnostics">diagnostics</a></div>
     <div class="cards">
       <div class="card"><div class="k">damage done</div><div class="v">${num(totals.damage)}</div></div>
       <div class="card"><div class="k">kills</div><div class="v">${num(totals.kills)}</div></div>
@@ -434,8 +427,8 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
         const last = opts.lastScan();
         body = JSON.stringify({ totals, sessions: store.listSessions(50), lastScan: last }, null, 2);
         type = 'application/json; charset=utf-8';
-      } else if (url.pathname === '/camps') {
-        body = renderCamps(store, opts.lastScan);
+      } else if (url.pathname === '/bags') {
+        body = renderBags(store, opts.lastScan);
       } else if (url.pathname === '/runs') {
         body = renderRuns(store, opts.lastScan);
       } else if (url.pathname === '/diagnostics') {

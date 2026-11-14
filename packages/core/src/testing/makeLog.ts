@@ -47,14 +47,10 @@ export interface MakeLogOptions {
   /** seconds between generated events */
   stepSeconds?: number;
   /**
-   * A sleeping-bag camp: the player unrolls a bag, then guests receive the camp buff. Each guest
-   * casts once so the fixture puts a position in the log for them, at the given distance.
+   * A sleeping-bag drop: the player unrolls a bag. Guest names only add camp-buff lines, which are
+   * noise the parser must ignore — nothing about a bag's attendees is recorded in the log.
    */
-  camp?: {
-    attendees?: { name?: string; distance: number }[];
-    /** buffed but standing far outside the radius: must not be counted as an attendee */
-    outsider?: { name?: string; distance: number } | null;
-  } | null;
+  bag?: { guests?: string[]; zone?: string } | null;
 }
 
 const PLAYER_GUID = 'Player-4385-0A1B2C3D';
@@ -240,35 +236,19 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     );
   }
 
-  if (opts.camp) {
-    const guests = [
-      ...(opts.camp.attendees ?? []).map((a, i) => ({ ...a, index: i })),
-      ...(opts.camp.outsider ? [{ ...opts.camp.outsider, index: 90 }] : []),
-    ].map((g, n) => ({ ...g, guid: `Player-6798-00C0FF${String(n).padStart(2, '0')}` }));
-
-    const guestHeader = (guid: string, name: string): string =>
-      [infoGuid ? '0000000000000000' : '', guid, `"${name}"`, '0x518', '0x0', guid, `"${name}"`, '0x518', '0x0']
-        .filter((v) => v.length > 0)
-        .join(',');
-
-    // A camp buff is applied to the player by the player: same guid on both sides, no position.
-    const selfHeader = `${header().join(',')},${PLAYER_GUID},${PLAYER_NAME},${flagsOf(opts, MINE)},0x0`;
-
-    // Positions only exist on events that carry a stat block, so every guest casts once.
-    for (const g of guests) {
-      line(
-        `SPELL_CAST_SUCCESS,${guestHeader(g.guid, g.name ?? 'Camper-PvP-US')},133,"Fireball",0x4,${unitBlock(g.guid, g.distance).join(',')}`,
-      );
-    }
-    // The bag itself: this is the only event that names a sleeping bag.
+  if (opts.bag) {
+    if (opts.bag.zone) line(`ZONE_CHANGE,1,"${opts.bag.zone}",0`);
+    // The bag itself: the only sleeping-bag event the log records.
     line(
       `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,429961,"Unroll Bag",0x1,${block(PLAYER_GUID).join(',')}`,
     );
-    // The buffs land a moment later, self-applied exactly as the client does it.
+    // Camp buffs are self-applied and must never be mistaken for bag events.
+    const selfHeader = `${header().join(',')},${PLAYER_GUID},${PLAYER_NAME},${flagsOf(opts, MINE)},0x0`;
     line(`SPELL_AURA_APPLIED,${selfHeader},429959,"Well-Rested",0x1,BUFF`);
-    for (const g of guests) {
+    for (const [i, guest] of (opts.bag.guests ?? []).entries()) {
+      const guid = `Player-6798-00B4${String(i).padStart(10, '0')}`;
       line(
-        `SPELL_AURA_APPLIED,${guestHeader(g.guid, g.name ?? 'Camper-PvP-US')},1229741,"Camp Benefits",0x1,BUFF`,
+        `SPELL_AURA_APPLIED,${guid},"${guest}",0x518,0x0,${guid},"${guest}",0x518,0x0,1229741,"Camp Benefits",0x1,BUFF`,
       );
     }
   }

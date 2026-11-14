@@ -17,12 +17,10 @@ import {
   payloadStart,
   type Layout,
 } from './layout';
-import type { Pos } from '../camps';
+import type { Pos } from '../bags';
 
 /** "Unroll Bag": the only event that names a sleeping bag, who dropped it and where. */
 export const BAG_SPELL = 429961;
-/** Buffs a bag hands out to everyone in range. Always applied source == destination. */
-export const CAMP_SPELLS = new Set([429959, 1229741, 1229451]);
 
 export type LogEvent =
   | { t: 'version'; advanced: boolean | null; build: string; projectId: number | null }
@@ -52,7 +50,6 @@ export type LogEvent =
       isCrit: boolean;
       /** Forever logs emit the same swing twice: a roll and a landed event. */
       swing?: 'roll' | 'landed';
-      pos?: Pos;
     }
   | {
       t: 'heal';
@@ -86,15 +83,6 @@ export type LogEvent =
     }
   | { t: 'castFailed'; ms: number; srcFlags: number; spellName: string; reason: string }
   | { t: 'interrupt'; ms: number; srcFlags: number; spellName: string; interrupted: string }
-  | {
-      /** a camp buff landing on a player: the only trace a sleeping bag leaves on someone */
-      t: 'campBuff';
-      ms: number;
-      guid: string;
-      name: string;
-      spellId: number;
-      spellName: string;
-    }
   | { t: 'died'; ms: number; guid: string; name: string; flags: number }
   | {
       t: 'kill';
@@ -259,26 +247,6 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
 
   if (event.endsWith('_SUPPORT')) return { event: null, skipped: true };
 
-  // Camp buffs are the only thing a sleeping bag leaves on a player, so they are decoded before
-  // the generic aura bail-out.
-  if (event === 'SPELL_AURA_APPLIED' || event === 'SPELL_AURA_APPLIED_DOSE') {
-    const h = headerIndex(layout.infoGuid);
-    const spellId = num(at(params, h.payload)) ?? 0;
-    if (CAMP_SPELLS.has(spellId)) {
-      return {
-        event: {
-          t: 'campBuff',
-          ms,
-          guid: at(params, h.dstGuid),
-          name: unquote(at(params, h.dstName)),
-          spellId,
-          spellName: unquote(at(params, h.payload + 1)) || 'unknown',
-        },
-      };
-    }
-    return { event: null, skipped: true };
-  }
-
   if (IGNORED_EVENTS.has(event)) return { event: null, skipped: true };
 
   if (DAMAGE_EVENTS.has(event)) {
@@ -313,7 +281,6 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
         })(),
         ...(event === 'SWING_DAMAGE' ? { swing: 'roll' as const } : {}),
         ...(event === 'SWING_DAMAGE_LANDED' ? { swing: 'landed' as const } : {}),
-        pos: positionOf(event, params, layout),
       },
     };
   }
