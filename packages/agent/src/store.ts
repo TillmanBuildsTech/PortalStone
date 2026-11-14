@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS session (
   kills INTEGER NOT NULL DEFAULT 0,
   deaths INTEGER NOT NULL DEFAULT 0,
   my_deaths INTEGER NOT NULL DEFAULT 0,
+  players_died INTEGER NOT NULL DEFAULT 0,
   casts INTEGER NOT NULL DEFAULT 0,
   interrupts INTEGER NOT NULL DEFAULT 0,
   zones TEXT,
@@ -118,6 +119,7 @@ export interface SessionRow {
   kills: number;
   deaths: number;
   my_deaths: number;
+  players_died: number;
   casts: number;
   interrupts: number;
   character_name: string | null;
@@ -139,6 +141,9 @@ export class Store {
     // Migrations for databases created by earlier builds. Cheap and safe: add missing columns.
     const cols = this.db.prepare('PRAGMA table_info(session)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'zones')) this.db.exec('ALTER TABLE session ADD COLUMN zones TEXT');
+    if (!cols.some((c) => c.name === 'players_died')) {
+      this.db.exec('ALTER TABLE session ADD COLUMN players_died INTEGER NOT NULL DEFAULT 0');
+    }
   }
 
   close(): void {
@@ -231,8 +236,8 @@ export class Store {
           .prepare(
             `INSERT INTO session (log_path, start_ms, end_ms, offset_min, zone_id, zone_name, zones,
                duration_s, active_s, engaged_s, damage_done, damage_taken, healing_done, overheal,
-               kills, deaths, my_deaths, casts, interrupts, character_guid, character_name, ingested_ms)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+               kills, deaths, my_deaths, players_died, casts, interrupts, character_guid, character_name, ingested_ms)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           )
           .run(
             logPath,
@@ -252,6 +257,7 @@ export class Store {
             s.open.kills,
             s.open.deaths,
             s.open.myDeaths,
+            s.open.playersDied,
             s.open.casts,
             s.open.interrupts,
             character.guid,

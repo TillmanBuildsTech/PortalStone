@@ -187,6 +187,7 @@ describe('ingest — PvP kills and zone attribution', () => {
     const s = res.sessions[0]!;
     expect(s.open.kills).toBe(1); // the enemy player died to us
     expect(s.open.deaths).toBe(1); // a player died
+    expect(s.open.playersDied).toBe(1); // one distinct player
     expect(s.open.myDeaths).toBe(0); // but not us
   });
 

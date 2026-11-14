@@ -51,6 +51,8 @@ export class Bag {
   readonly castFailures = new Map<string, number>();
   readonly killedNames = new Map<string, number>();
   readonly deathLog: DeathRecord[] = [];
+  /** distinct players seen dying (one player can die several times) */
+  readonly deathVictims = new Set<string>();
 
   private touch(ms: number): void {
     if (!this.firstMs || ms < this.firstMs) this.firstMs = ms;
@@ -134,6 +136,7 @@ export class Bag {
       kills: this.kills,
       deaths: this.deaths,
       myDeaths: this.myDeaths,
+      playersDied: this.deathVictims.size,
       durationS: round(durS, 1),
       engagedS: round(engagedS, 1),
       dps: durS > 0 ? round(this.damageDone / durS, 1) : 0,
@@ -160,6 +163,8 @@ export interface BagSnapshot {
   kills: number;
   deaths: number;
   myDeaths: number;
+  /** distinct players who died (deaths counts events; one player can die several times) */
+  playersDied: number;
   durationS: number;
   engagedS: number;
   dps: number;
@@ -188,6 +193,8 @@ export interface ZoneStat {
   ms: number;
   /** damage this character dealt while in this zone */
   damage: number;
+  /** player deaths observed in this zone (everyone, not just you) */
+  deaths: number;
 }
 
 export interface SessionResult {
@@ -305,7 +312,7 @@ export class Aggregator {
     const key = name || 'unknown';
     let stat = s.zones.find((z) => z.name === key);
     if (!stat) {
-      stat = { name: key, ms: 0, damage: 0 };
+      stat = { name: key, ms: 0, damage: 0, deaths: 0 };
       s.zones.push(stat);
     }
     return stat;
@@ -481,6 +488,8 @@ export class Aggregator {
           bag.deaths++;
           bag.deathLog.push({ ms, name: ev.name, killer: last?.name ?? 'unknown', mine });
           if (mine) bag.myDeaths++;
+          if (ev.guid) bag.deathVictims.add(ev.guid);
+          this.zoneStat(s, s.zoneName).deaths++;
         }
         // A kill is a kill, PvE or PvP: if the last hit on this unit was ours, it died to us.
         // Battleground reports are meaningless without this — player victims were only counted

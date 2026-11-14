@@ -51,9 +51,9 @@ function when(ms: number | null | undefined, offsetMin = 0): string {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-/** Where the session actually happened: zones with time and damage, biggest first. */
+/** Where the session actually happened: zones with time, damage and deaths, biggest first. */
 function zoneTable(s: SessionRow): string {
-  let zones: { name: string; ms: number; damage: number }[] = [];
+  let zones: { name: string; ms: number; damage: number; deaths: number }[] = [];
   try {
     zones = s.zones ? (JSON.parse(s.zones) as typeof zones) : [];
   } catch {
@@ -65,11 +65,14 @@ function zoneTable(s: SessionRow): string {
     .map(
       (z) =>
         `<tr><td>${esc(z.name)}</td><td>${dur(z.ms / 1000)}</td><td>${num(z.damage)}</td>
+         <td>${num(z.deaths)}</td>
          <td>${((100 * (z.ms || 0)) / Math.max(s.duration_s * 1000, 1)).toFixed(0)}%</td></tr>`,
     )
     .join('');
   return `<h2>where the time went</h2><table><thead><tr><th>zone</th><th>time</th>
-    <th>damage</th><th>share</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <th>your damage</th><th>field deaths</th><th>time share</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="sub" style="margin-top:6px">field deaths are players dying around you — everyone's,
+    not yours. Your own deaths are the card above.</div>`;
 }
 
 function dayLabel(ms: number, offsetMin = 0): string {
@@ -221,7 +224,7 @@ function renderSession(store: Store, id: number): string {
       <div class="card"><div class="k">in combat</div><div class="v">${dur(s.engaged_s)}</div></div>
       <div class="card"><div class="k">kills</div><div class="v">${num(s.kills)}</div></div>
       <div class="card"><div class="k">your deaths</div><div class="v">${num(s.my_deaths)}</div></div>
-      <div class="card"><div class="k">players died</div><div class="v">${num(s.deaths)}</div></div>
+      <div class="card"><div class="k">field deaths (${num(s.players_died)} players)</div><div class="v">${num(s.deaths)}</div></div>
       <div class="card"><div class="k">casts</div><div class="v">${num(s.casts)}</div></div>
       <div class="card"><div class="k">interrupts</div><div class="v">${num(s.interrupts)}</div></div>
     </div>
