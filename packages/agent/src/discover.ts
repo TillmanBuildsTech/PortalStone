@@ -30,6 +30,8 @@ export interface FlavorInfo {
   dir: string;
   logs: LogInfo[];
   accounts: AccountInfo[];
+  /** installed addon folders that ship a .toc, so "installed" can be told from "configured" */
+  addons: string[];
 }
 
 export interface InstallInfo {
@@ -119,12 +121,33 @@ function listAccounts(flavorDir: string): AccountInfo[] {
   return out;
 }
 
+function listAddonFolders(flavorDir: string): string[] {
+  const dir = join(flavorDir, 'Interface', 'AddOns');
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const files = readdirSync(join(dir, entry.name));
+        if (files.some((f) => f.toLowerCase().endsWith('.toc'))) out.push(entry.name);
+      } catch {
+        /* unreadable folder: skip it, never fail discovery */
+      }
+    }
+  } catch {
+    return [];
+  }
+  return out.sort();
+}
+
 export function scanFlavor(dir: string): FlavorInfo {
   return {
     name: basename(dir),
     dir,
     logs: listLogs(dir),
     accounts: listAccounts(dir),
+    addons: listAddonFolders(dir),
   };
 }
 

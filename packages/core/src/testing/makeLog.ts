@@ -31,6 +31,10 @@ export interface MakeLogOptions {
   zone3?: { id: number; name: string } | null;
   /** damage dealt inside zone2, before the change back: makes the middle zone a real visit */
   zone2Damage?: number[];
+  /** spell carrying the player's damage lines (default Fireball), so two zones can differ */
+  ability?: { name: string; id: number };
+  /** spell carrying the zone2 damage lines (default Fireball) */
+  zone2Ability?: { name: string; id: number };
   /** heals cast by the player, per spell: exercises healing-by-ability */
   heals?: { spell?: string; spellId?: number; amount: number; overheal?: number }[];
   /** casts emitted before the zone change, so the session begins in the first zone */
@@ -44,9 +48,13 @@ export interface MakeLogOptions {
   swingDamage?: number[];
   swingEvents?: 'both' | 'roll' | 'landed';
   casts?: number;
+  /** casts of specific spells, so ranks (same name, different id) can be exercised */
+  castSpells?: { id: number; name: string; count: number }[];
   interrupts?: number;
   misses?: string[];
   mobKills?: number;
+  /** creatures killed by another player: they die, but the last hit is not yours */
+  groupKills?: number;
   playerDeath?: boolean;
   /** replace the hex flag fields with words, to force calibration failure */
   corruptFlags?: boolean;
@@ -176,8 +184,9 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     line(`ZONE_CHANGE,${opts.zone2.id},"${opts.zone2.name}"`);
   }
   for (const amount of opts.zone2Damage ?? []) {
+    const ab = opts.zone2Ability ?? { name: 'Fireball', id: 133 };
     line(
-      `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
+      `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,${ab.id},"${ab.name}",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
     );
   }
   if (opts.zone3) {
@@ -185,8 +194,9 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   }
 
   for (const amount of opts.playerDamage ?? []) {
+    const ab = opts.ability ?? { name: 'Fireball', id: 133 };
     line(
-      `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
+      `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,${ab.id},"${ab.name}",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
     );
   }
   for (const heal of opts.heals ?? []) {
@@ -216,6 +226,13 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     }
     wall += step;
   }
+  for (const spell of opts.castSpells ?? []) {
+    for (let i = 0; i < spell.count; i++) {
+      line(
+        `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,${spell.id},"${spell.name}",0x2,${block(PLAYER_GUID).join(',')}`,
+      );
+    }
+  }
   for (let i = 0; i < (opts.casts ?? 0); i++) {
     line(
       `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PLAYER_GUID).join(',')}`,
@@ -233,6 +250,15 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   }
   for (let i = 0; i < (opts.mobKills ?? 0); i++) {
     // The unit that dies is the one the player has been hitting, so last-hit attribution works.
+    line(
+      `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,0000000000000000,"nil",0x80000000,0x80000000,0`,
+    );
+  }
+  for (let i = 0; i < (opts.groupKills ?? 0); i++) {
+    // Another player hits the mob, then it dies: a field kill, not one of yours.
+    line(
+      `SPELL_DAMAGE,${infoGuid ? '0000000000000000,' : ''}Player-6798-00B4GROUP1,"Groupmate",0x512,0x0,${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, 500, 4, true).join(',')}`,
+    );
     line(
       `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,0000000000000000,"nil",0x80000000,0x80000000,0`,
     );

@@ -11,6 +11,13 @@ import { DatabaseSync } from 'node:sqlite';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 import type { BagDrop } from '../../core/src/bags';
 
+/**
+ * Bumped when the derived data gains a dimension that an older database cannot have. A mismatch
+ * triggers one full re-read of every log, which is cheap next to telling the user to run --rebuild.
+ */
+const DETAIL_SCHEMA = '4';
+
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -48,6 +55,7 @@ CREATE TABLE IF NOT EXISTS session (
   healing_done INTEGER NOT NULL DEFAULT 0,
   overheal INTEGER NOT NULL DEFAULT 0,
   kills INTEGER NOT NULL DEFAULT 0,
+  field_kills INTEGER NOT NULL DEFAULT 0,
   deaths INTEGER NOT NULL DEFAULT 0,
   my_deaths INTEGER NOT NULL DEFAULT 0,
   players_died INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +102,7 @@ CREATE TABLE IF NOT EXISTS zone_segment (
   damage_taken INTEGER NOT NULL DEFAULT 0,
   healing_done INTEGER NOT NULL DEFAULT 0,
   kills INTEGER NOT NULL DEFAULT 0,
+  field_kills INTEGER NOT NULL DEFAULT 0,
   my_deaths INTEGER NOT NULL DEFAULT 0,
   field_deaths INTEGER NOT NULL DEFAULT 0,
   players_died INTEGER NOT NULL DEFAULT 0,
@@ -125,10 +134,73 @@ CREATE TABLE IF NOT EXISTS session_ability (
   hits INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS segment_ability (
+  segment_id INTEGER NOT NULL REFERENCES zone_segment(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  spell_id INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  amount INTEGER NOT NULL DEFAULT 0,
+  hits INTEGER NOT NULL DEFAULT 0
+);
+
+-- A property the user chose to track, from any installed addon. The base adapter discovers what
+-- is available; these two tables are what turns one of those properties into a time series.
+CREATE TABLE IF NOT EXISTS tracked_metric (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  addon_file TEXT NOT NULL,
+  global_name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  label TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'plain',
+  -- 'number': summed scalar, charted. 'set': the members of a table (equipment slots), diffed.
+  kind TEXT NOT NULL DEFAULT 'number',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_ms INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_metric_unique ON tracked_metric (addon_file, path);
+
+CREATE TABLE IF NOT EXISTS tracked_sample (
+  metric_id INTEGER NOT NULL REFERENCES tracked_metric(id) ON DELETE CASCADE,
+  ts_ms INTEGER NOT NULL,
+  value REAL NOT NULL,
+  instances INTEGER NOT NULL DEFAULT 1,
+  min_value REAL,
+  max_value REAL,
+  -- set metrics: JSON [{k,v}] of the members observed at this flush
+  members TEXT,
+  source_file TEXT,
+  source_mtime_ms INTEGER NOT NULL DEFAULT 0
+);
+
+-- One sample per SavedVariables flush: the file only changes when the game writes it, so the
+-- mtime is the natural key and re-scanning the same file cannot duplicate a point.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_sample_flush ON tracked_sample (metric_id, source_mtime_ms);
+CREATE INDEX IF NOT EXISTS idx_tracked_sample_ts ON tracked_sample (metric_id, ts_ms DESC);
+
+-- Item names, once known, never fetched again. Ids are always the fallback, so a slow or partial
+-- name source degrades the display and nothing else.
+CREATE TABLE IF NOT EXISTS item_name (
+  item_id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  fetched_ms INTEGER NOT NULL
+);
+
+-- Ids a source looked up and could not resolve. Without this, a private-server item that simply
+-- does not exist upstream would be re-requested on every scan forever.
+CREATE TABLE IF NOT EXISTS item_name_miss (
+  item_id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL,
+  checked_ms INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_session_start ON session (start_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_segment_session ON zone_segment (session_id);
 CREATE INDEX IF NOT EXISTS idx_segment_start ON zone_segment (start_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_segment_zone ON zone_segment (zone_name);
 CREATE INDEX IF NOT EXISTS idx_ability_session ON session_ability (session_id);
+CREATE INDEX IF NOT EXISTS idx_segment_ability ON segment_ability (segment_id, kind);
 `;
 
 export interface LogState {
@@ -162,6 +234,13 @@ export interface BagDropStats {
   zones: { zone_name: string; count: number }[];
 }
 
+export interface AbilityRow {
+  spell_id: number;
+  name: string;
+  amount: number;
+  hits: number;
+}
+
 export interface SegmentRow {
   id: number;
   session_id: number;
@@ -176,6 +255,7 @@ export interface SegmentRow {
   damage_taken: number;
   healing_done: number;
   kills: number;
+  field_kills: number;
   my_deaths: number;
   field_deaths: number;
   players_died: number;
@@ -196,6 +276,7 @@ export interface SessionRow {
   healing_done: number;
   overheal: number;
   kills: number;
+  field_kills: number;
   deaths: number;
   my_deaths: number;
   players_died: number;
@@ -205,6 +286,47 @@ export interface SessionRow {
   zones: string | null;
   encounters: number;
   zones_count: number;
+}
+
+/** A property the user chose to track, and what it meant to them. */
+export interface TrackedMetricRow {
+  id: number;
+  addon_file: string;
+  global_name: string;
+  /** JSON array of path segments, because addon keys may contain anything */
+  path: string;
+  label: string;
+  unit: string;
+  /** 'number' (summed scalar) or 'set' (members of a table, e.g. equipped gear) */
+  kind: string;
+  enabled: number;
+  created_ms: number;
+}
+
+export interface TrackedSampleRow {
+  metric_id: number;
+  ts_ms: number;
+  value: number;
+  instances: number;
+  min_value: number | null;
+  max_value: number | null;
+  /** set metrics: JSON array of {k,v} members observed at this flush */
+  members: string | null;
+  source_file: string | null;
+  source_mtime_ms: number;
+}
+
+export interface Totals {
+  sessions: number;
+  damage: number;
+  healing: number;
+  kills: number;
+  myDeaths: number;
+  deaths: number;
+  durationS: number;
+  engagedS: number;
+  firstMs: number | null;
+  lastMs: number | null;
 }
 
 export class Store {
@@ -219,8 +341,23 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
     // Migrations for databases created by earlier builds. Cheap and safe: add missing columns.
+    const metricCols = this.db.prepare('PRAGMA table_info(tracked_metric)').all() as { name: string }[];
+    if (!metricCols.some((c) => c.name === 'kind')) {
+      this.db.exec("ALTER TABLE tracked_metric ADD COLUMN kind TEXT NOT NULL DEFAULT 'number'");
+    }
+    const sampleCols = this.db.prepare('PRAGMA table_info(tracked_sample)').all() as { name: string }[];
+    if (!sampleCols.some((c) => c.name === 'members')) {
+      this.db.exec('ALTER TABLE tracked_sample ADD COLUMN members TEXT');
+    }
     const cols = this.db.prepare('PRAGMA table_info(session)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'zones')) this.db.exec('ALTER TABLE session ADD COLUMN zones TEXT');
+    if (!cols.some((c) => c.name === 'field_kills')) {
+      this.db.exec('ALTER TABLE session ADD COLUMN field_kills INTEGER NOT NULL DEFAULT 0');
+    }
+    const segCols = this.db.prepare('PRAGMA table_info(zone_segment)').all() as { name: string }[];
+    if (!segCols.some((c) => c.name === 'field_kills')) {
+      this.db.exec('ALTER TABLE zone_segment ADD COLUMN field_kills INTEGER NOT NULL DEFAULT 0');
+    }
     if (!cols.some((c) => c.name === 'players_died')) {
       this.db.exec('ALTER TABLE session ADD COLUMN players_died INTEGER NOT NULL DEFAULT 0');
     }
@@ -325,8 +462,12 @@ export class Store {
     this.db.exec('BEGIN');
     try {
       const stale = this.db.prepare('SELECT id FROM session WHERE log_path = ? AND start_ms >= ?').all(logPath, fromMs) as { id: number }[];
+      const dropAbilities = this.db.prepare(
+        'DELETE FROM segment_ability WHERE segment_id IN (SELECT id FROM zone_segment WHERE session_id = ?)',
+      );
       for (const row of stale) {
         this.db.prepare('DELETE FROM session_ability WHERE session_id = ?').run(row.id);
+        dropAbilities.run(row.id);
         this.db.prepare('DELETE FROM encounter WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM zone_segment WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM session WHERE id = ?').run(row.id);
@@ -340,8 +481,9 @@ export class Store {
           .prepare(
             `INSERT INTO session (log_path, start_ms, end_ms, offset_min, zone_id, zone_name, zones,
                duration_s, active_s, engaged_s, damage_done, damage_taken, healing_done, overheal,
-               kills, deaths, my_deaths, players_died, casts, interrupts, character_guid, character_name, ingested_ms)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+               kills, field_kills, deaths, my_deaths, players_died, casts, interrupts, character_guid,
+               character_name, ingested_ms)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           )
           .run(
             logPath,
@@ -361,6 +503,7 @@ export class Store {
             s.open.healingDone,
             s.open.overheal,
             s.open.kills,
+            s.open.fieldKills,
             s.open.deaths,
             s.open.myDeaths,
             s.open.playersDied,
@@ -372,32 +515,43 @@ export class Store {
           );
         const id = Number(info.lastInsertRowid);
         ids.push(id);
+        const insertSegment = this.db.prepare(
+          `INSERT INTO zone_segment (session_id, zone_id, zone_name, kind, start_ms, end_ms,
+             duration_s, engaged_s, damage_done, damage_taken, healing_done, kills, field_kills,
+             my_deaths, field_deaths, players_died, casts)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        );
+        const insertSegmentAbility = this.db.prepare(
+          'INSERT INTO segment_ability (segment_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
+        );
         for (const z of s.zones) {
-          this.db
-            .prepare(
-              `INSERT INTO zone_segment (session_id, zone_id, zone_name, kind, start_ms, end_ms,
-                 duration_s, engaged_s, damage_done, damage_taken, healing_done, kills, my_deaths,
-                 field_deaths, players_died, casts)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            )
-            .run(
-              id,
-              z.zoneId,
-              z.name,
-              z.kind,
-              z.startMs,
-              z.endMs,
-              round((z.endMs - z.startMs) / 1000),
-              round(z.engagedS),
-              z.damageDone,
-              z.damageTaken,
-              z.healingDone,
-              z.kills,
-              z.myDeaths,
-              z.deaths,
-              z.playersDied,
-              z.casts,
-            );
+          const seg = insertSegment.run(
+            id,
+            z.zoneId,
+            z.name,
+            z.kind,
+            z.startMs,
+            z.endMs,
+            round((z.endMs - z.startMs) / 1000),
+            round(z.engagedS),
+            z.damageDone,
+            z.damageTaken,
+            z.healingDone,
+            z.kills,
+            z.fieldKills,
+            z.myDeaths,
+            z.deaths,
+            z.playersDied,
+            z.casts,
+          );
+          // Per-run detail is what the run page drills into: the same ability breakdown the
+          // session gets, kept against the zone visit it happened in.
+          const segmentId = Number(seg.lastInsertRowid);
+          for (const a of z.topAbilities) insertSegmentAbility.run(segmentId, 'damage', a.id, a.name, a.amount, a.hits);
+          for (const a of z.topHealing) insertSegmentAbility.run(segmentId, 'healing', a.id, a.name, a.amount, a.hits);
+          for (const a of z.topDamageTaken) insertSegmentAbility.run(segmentId, 'taken', a.id, a.name, a.amount, a.hits);
+          // Casts keep the spell id, so two ranks of one spell stay two rows.
+          for (const c of z.topCasts) insertSegmentAbility.run(segmentId, 'cast', c.id, c.name, c.casts, 0);
         }
         const insertAbility = this.db.prepare(
           'INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
@@ -407,6 +561,12 @@ export class Store {
         }
         for (const a of s.open.topHealing) {
           insertAbility.run(id, 'healing', a.id, a.name, a.amount, a.hits);
+        }
+        for (const a of s.open.topDamageTaken) {
+          insertAbility.run(id, 'taken', a.id, a.name, a.amount, a.hits);
+        }
+        for (const c of s.open.topCasts) {
+          insertAbility.run(id, 'cast', c.id, c.name, c.casts, 0);
         }
         for (const e of s.encounters) {
           this.db
@@ -462,10 +622,72 @@ export class Store {
     return this.db.prepare('SELECT * FROM session WHERE id = ?').get(id) as unknown as SessionRow | undefined;
   }
 
-  abilities(sessionId: number, kind = 'damage'): { name: string; amount: number; hits: number }[] {
+  abilities(sessionId: number, kind = 'damage', limit = 12): AbilityRow[] {
     return this.db
-      .prepare('SELECT name, amount, hits FROM session_ability WHERE session_id = ? AND kind = ? ORDER BY amount DESC LIMIT 10')
-      .all(sessionId, kind) as unknown as { name: string; amount: number; hits: number }[];
+      .prepare(
+        'SELECT spell_id, name, amount, hits FROM session_ability WHERE session_id = ? AND kind = ? ORDER BY amount DESC LIMIT ?',
+      )
+      .all(sessionId, kind, limit) as unknown as AbilityRow[];
+  }
+
+  /**
+   * Average amount per hit for every spell id in a session, across damage and healing.
+   * Casts are counted per id, so this is what turns "id 1042, 32 casts" into "id 1042, 32 casts at
+   * 630 a hit" — size is the only way to tell which rank is which without a rank table.
+   */
+  spellAverages(sessionId: number): Map<number, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT spell_id, CAST(SUM(amount) / NULLIF(SUM(hits), 0) AS INTEGER) avg
+           FROM session_ability WHERE session_id = ? AND kind IN ('damage','healing')
+           GROUP BY spell_id`,
+      )
+      .all(sessionId) as unknown as { spell_id: number; avg: number }[];
+    return new Map(rows.map((r) => [r.spell_id, r.avg]));
+  }
+
+  segmentSpellAverages(segmentId: number): Map<number, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT spell_id, CAST(SUM(amount) / NULLIF(SUM(hits), 0) AS INTEGER) avg
+           FROM segment_ability WHERE segment_id = ? AND kind IN ('damage','healing')
+           GROUP BY spell_id`,
+      )
+      .all(segmentId) as unknown as { spell_id: number; avg: number }[];
+    return new Map(rows.map((r) => [r.spell_id, r.avg]));
+  }
+
+  /** One zone visit, by segment id: the drill-in target behind a run. */
+  segment(id: number): SegmentRow | undefined {
+    return this.db.prepare('SELECT * FROM zone_segment WHERE id = ?').get(id) as unknown as SegmentRow | undefined;
+  }
+
+  /** Damage, healing or damage taken for one run, largest first. */
+  segmentAbilities(segmentId: number, kind = 'damage', limit = 12): AbilityRow[] {
+    return this.db
+      .prepare(
+        'SELECT spell_id, name, amount, hits FROM segment_ability WHERE segment_id = ? AND kind = ? ORDER BY amount DESC LIMIT ?',
+      )
+      .all(segmentId, kind, limit) as unknown as AbilityRow[];
+  }
+
+  /**
+   * Every run in a zone, newest first. This is the comparison basis for "how did this run compare
+   * to my other runs here" — the same character, the same content, so the rates are comparable.
+   */
+  runsForZone(zoneName: string, limit = 200): SegmentRow[] {
+    return this.db
+      .prepare('SELECT * FROM zone_segment WHERE zone_name = ? ORDER BY start_ms DESC LIMIT ?')
+      .all(zoneName, limit) as unknown as SegmentRow[];
+  }
+
+  /** True while the database predates per-run ability detail and needs one full re-read. */
+  needsDetailBackfill(): boolean {
+    return this.meta('detail_schema') !== DETAIL_SCHEMA;
+  }
+
+  markDetailSchema(): void {
+    this.setMeta('detail_schema', DETAIL_SCHEMA);
   }
 
   /** Bag drops for one log, replacing whatever this log produced before. */
@@ -536,15 +758,214 @@ export class Store {
       .all(limit) as unknown as SegmentRow[];
   }
 
+  /**
+   * Properties the user chose to track.
+   *
+   * The base adapter discovers what an addon exposes; this is the selection half. A metric is
+   * identified by (file, path) rather than by a provider id so the same money property in the same
+   * addon keeps its history across restarts.
+   */
+  trackedMetrics(): TrackedMetricRow[] {
+    return this.db
+      .prepare('SELECT * FROM tracked_metric WHERE enabled = 1 ORDER BY created_ms, id')
+      .all() as unknown as TrackedMetricRow[];
+  }
+
+  trackedMetric(id: number): TrackedMetricRow | undefined {
+    return this.db.prepare('SELECT * FROM tracked_metric WHERE id = ?').get(id) as unknown as TrackedMetricRow | undefined;
+  }
+
+  /** Track a property. Tracking one twice re-enables it rather than duplicating the series. */
+  addTrackedMetric(m: {
+    addonFile: string;
+    globalName: string;
+    path: string[];
+    label: string;
+    unit: string;
+    kind?: 'number' | 'set';
+  }): number {
+    const pathJson = JSON.stringify(m.path);
+    const kind = m.kind === 'set' ? 'set' : 'number';
+    const existing = this.db
+      .prepare('SELECT id FROM tracked_metric WHERE addon_file = ? AND path = ?')
+      .get(m.addonFile, pathJson) as { id: number } | undefined;
+    if (existing) {
+      this.db
+        .prepare('UPDATE tracked_metric SET enabled = 1, label = ?, unit = ?, kind = ? WHERE id = ?')
+        .run(m.label, m.unit, kind, existing.id);
+      return existing.id;
+    }
+    const info = this.db
+      .prepare(
+        `INSERT INTO tracked_metric (addon_file, global_name, path, label, unit, kind, enabled, created_ms)
+         VALUES (?,?,?,?,?,?,1,?)`,
+      )
+      .run(m.addonFile, m.globalName, pathJson, m.label, m.unit, kind, Date.now());
+    return Number(info.lastInsertRowid);
+  }
+
+  removeTrackedMetric(id: number): void {
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM tracked_sample WHERE metric_id = ?').run(id);
+      this.db.prepare('DELETE FROM tracked_metric WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /** One observation per flush. Returns false when this flush is already stored. */
+  recordSample(s: {
+    metricId: number;
+    tsMs: number;
+    value: number;
+    instances: number;
+    minValue: number | null;
+    maxValue: number | null;
+    members?: { k: string; v: string }[] | null;
+    sourceFile: string;
+    sourceMtimeMs: number;
+  }): boolean {
+    const info = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO tracked_sample
+           (metric_id, ts_ms, value, instances, min_value, max_value, members, source_file, source_mtime_ms)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        s.metricId,
+        s.tsMs,
+        s.value,
+        s.instances,
+        s.minValue,
+        s.maxValue,
+        s.members ? JSON.stringify(s.members) : null,
+        s.sourceFile,
+        s.sourceMtimeMs,
+      );
+    return Number(info.changes) > 0;
+  }
+
+  /** Samples oldest first (chart order), at most `limit` of the newest. */
+  samples(metricId: number, limit = 400): TrackedSampleRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM tracked_sample WHERE metric_id = ? ORDER BY ts_ms DESC LIMIT ?')
+      .all(metricId, limit) as unknown as TrackedSampleRow[];
+    return rows.reverse();
+  }
+
+  latestSample(metricId: number): TrackedSampleRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM tracked_sample WHERE metric_id = ? ORDER BY ts_ms DESC LIMIT 1')
+      .get(metricId) as unknown as TrackedSampleRow | undefined;
+  }
+
+  /** Names for the ids we have, best-effort. Missing ids are simply absent from the map. */
+  itemNames(ids: number[]): Map<number, string> {
+    const out = new Map<number, string>();
+    if (ids.length === 0) return out;
+    const chunk: number[] = [];
+    const unique = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    for (const id of unique) chunk.push(id);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT item_id, name FROM item_name WHERE item_id IN (${placeholders})`)
+      .all(...chunk) as unknown as { item_id: number; name: string }[];
+    for (const row of rows) out.set(row.item_id, row.name);
+    return out;
+  }
+
+  /** Names plus which source produced them, so the UI can say where a name came from. */
+  itemNameDetails(ids: number[]): Map<number, { name: string; source: string }> {
+    const out = new Map<number, { name: string; source: string }>();
+    const unique = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT item_id, name, source FROM item_name WHERE item_id IN (${placeholders})`)
+      .all(...unique) as unknown as { item_id: number; name: string; source: string }[];
+    for (const row of rows) out.set(row.item_id, { name: row.name, source: row.source });
+    return out;
+  }
+
+  /** Store names. Existing rows are kept: a name never has to be fetched twice. */
+  saveItemNames(rows: { id: number; name: string; source: string }[]): number {
+    if (rows.length === 0) return 0;
+    const stmt = this.db.prepare(
+      'INSERT INTO item_name (item_id, name, source, fetched_ms) VALUES (?,?,?,?) ON CONFLICT(item_id) DO NOTHING',
+    );
+    let added = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const row of rows) {
+        const info = stmt.run(row.id, row.name, row.source, Date.now());
+        added += Number(info.changes);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return added;
+  }
+
+  itemNameCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) c FROM item_name').get() as { c: number }).c;
+  }
+
+  /** How many names came from each source, for the diagnostics page. */
+  itemNameSources(): { source: string; count: number }[] {
+    return this.db
+      .prepare('SELECT source, COUNT(*) count FROM item_name GROUP BY source ORDER BY count DESC')
+      .all() as unknown as { source: string; count: number }[];
+  }
+
+  /** Ids a source failed to resolve recently: retried after `maxAgeMs`, not every scan. */
+  itemNameMisses(ids: number[], maxAgeMs: number): Set<number> {
+    const out = new Set<number>();
+    const unique = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => '?').join(',');
+    const since = Date.now() - maxAgeMs;
+    const rows = this.db
+      .prepare(`SELECT item_id FROM item_name_miss WHERE item_id IN (${placeholders}) AND checked_ms >= ?`)
+      .all(...unique, since) as unknown as { item_id: number }[];
+    for (const row of rows) out.add(row.item_id);
+    return out;
+  }
+
+  saveItemNameMisses(ids: number[], source: string): void {
+    if (ids.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT INTO item_name_miss (item_id, source, checked_ms) VALUES (?,?,?)
+       ON CONFLICT(item_id) DO UPDATE SET source = excluded.source, checked_ms = excluded.checked_ms`,
+    );
+    const now = Date.now();
+    for (const id of ids) stmt.run(id, source, now);
+  }
+
   logFiles(): Record<string, unknown>[] {
     return this.db.prepare('SELECT * FROM log_file ORDER BY scanned_ms DESC').all() as unknown as Record<string, unknown>[];
   }
 
-  totals(): { sessions: number; damage: number; kills: number; firstMs: number | null; lastMs: number | null } {
-    const row = this.db
-      .prepare('SELECT COUNT(*) AS sessions, COALESCE(SUM(damage_done),0) AS damage, COALESCE(SUM(kills),0) AS kills, MIN(start_ms) AS firstMs, MAX(end_ms) AS lastMs FROM session')
-      .get() as { sessions: number; damage: number; kills: number; firstMs: number | null; lastMs: number | null };
-    return row;
+  totals(): Totals {
+    return this.db
+      .prepare(
+        `SELECT COUNT(*) AS sessions,
+                COALESCE(SUM(damage_done),0) AS damage,
+                COALESCE(SUM(healing_done),0) AS healing,
+                COALESCE(SUM(kills),0) AS kills,
+                COALESCE(SUM(my_deaths),0) AS myDeaths,
+                COALESCE(SUM(deaths),0) AS deaths,
+                COALESCE(SUM(duration_s),0) AS durationS,
+                COALESCE(SUM(engaged_s),0) AS engagedS,
+                MIN(start_ms) AS firstMs,
+                MAX(end_ms) AS lastMs
+           FROM session`,
+      )
+      .get() as unknown as Totals;
   }
 }
 

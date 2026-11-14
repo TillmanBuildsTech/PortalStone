@@ -7,6 +7,7 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "scan": "tsx src/main.ts --once",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   }
 }

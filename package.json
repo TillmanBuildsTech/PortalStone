@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm -w @portalstone/core test",
+    "test": "npm -w @portalstone/core test && npm -w @portalstone/agent test",
     "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/agent/tsconfig.json --noEmit",
     "agent": "tsx packages/agent/src/main.ts",
     "mvp": "tsx packages/agent/src/main.ts --open",

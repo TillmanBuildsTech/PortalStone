@@ -24,6 +24,19 @@ export interface AbilityStat {
   crits: number;
 }
 
+/**
+ * Casts are counted per spell *id*, not per name.
+ *
+ * Spell ranks share a name in the log ("Holy Light") but not an id (647, 1026, 1042), and the rank
+ * number itself is never written down. Counting by id is therefore the only way to tell a rank-3
+ * cast from a rank-5 one.
+ */
+export interface CastStat {
+  id: number;
+  name: string;
+  casts: number;
+}
+
 export interface DeathRecord {
   ms: number;
   name: string;
@@ -53,6 +66,12 @@ export class Bag {
   casts = 0;
   interrupts = 0;
   kills = 0;
+  /**
+   * Units that died while this bag was open, regardless of who killed them — the mirror of
+   * `deaths` (field deaths). In a group dungeon a healer lands almost no killing blows, so
+   * `kills` alone reports "1 kill" for a run where eighty mobs died.
+   */
+  fieldKills = 0;
   deaths = 0;
   myDeaths = 0;
   engagedMs = 0;
@@ -60,6 +79,7 @@ export class Bag {
   lastMs = 0;
   readonly damageByAbility = new Map<number, AbilityStat>();
   readonly healingByAbility = new Map<number, AbilityStat>();
+  readonly castByAbility = new Map<number, CastStat>();
   readonly takenByAbility = new Map<number, AbilityStat>();
   readonly misses = new Map<string, number>();
   readonly castFailures = new Map<string, number>();
@@ -101,6 +121,7 @@ export class Bag {
     this.casts += other.casts;
     this.interrupts += other.interrupts;
     this.kills += other.kills;
+    this.fieldKills += other.fieldKills;
     this.deaths += other.deaths;
     this.myDeaths += other.myDeaths;
     this.engagedMs = Math.max(this.engagedMs, other.engagedMs);
@@ -108,6 +129,11 @@ export class Bag {
     this.lastMs = Math.max(this.lastMs, other.lastMs);
     this.lastActivityMs = Math.max(this.lastActivityMs, other.lastActivityMs);
     for (const [key, v] of other.damageByAbility) mergeAbility(this.damageByAbility, key, v);
+    for (const [key, v] of other.castByAbility) {
+      const cur = this.castByAbility.get(key);
+      if (cur) cur.casts += v.casts;
+      else this.castByAbility.set(key, { ...v });
+    }
     for (const [key, v] of other.healingByAbility) mergeAbility(this.healingByAbility, key, v);
     for (const [key, v] of other.takenByAbility) mergeAbility(this.takenByAbility, key, v);
     for (const [key, v] of other.misses) this.misses.set(key, (this.misses.get(key) ?? 0) + v);
@@ -140,6 +166,13 @@ export class Bag {
         crits: isCrit ? 1 : 0,
       });
     }
+  }
+
+  addCast(spellId: number, spellName: string): void {
+    const key = spellId || -1;
+    const cur = this.castByAbility.get(key);
+    if (cur) cur.casts++;
+    else this.castByAbility.set(key, { id: spellId, name: spellName, casts: 1 });
   }
 
   addTaken(spellId: number, spellName: string, amount: number): void {
@@ -192,6 +225,7 @@ export class Bag {
       casts: this.casts,
       interrupts: this.interrupts,
       kills: this.kills,
+      fieldKills: this.fieldKills,
       deaths: this.deaths,
       myDeaths: this.myDeaths,
       playersDied: this.deathVictims.size,
@@ -200,9 +234,11 @@ export class Bag {
       dps: durS > 0 ? round(this.damageDone / durS, 1) : 0,
       dpsEngaged: engagedS > 0 ? round(this.damageDone / engagedS, 1) : 0,
       hps: durS > 0 ? round(this.healingDone / durS, 1) : 0,
-      topAbilities: top(this.damageByAbility, 8),
-      topHealing: top(this.healingByAbility, 8),
-      topDamageTaken: top(this.takenByAbility, 8),
+      topAbilities: top(this.damageByAbility, 12),
+      topHealing: top(this.healingByAbility, 12),
+      topDamageTaken: top(this.takenByAbility, 12),
+      // One line per spell id, so two ranks of one spell stay two lines.
+      topCasts: [...this.castByAbility.values()].sort((a, b) => b.casts - a.casts).slice(0, 20),
       misses: counted(this.misses, 6),
       castFailures: counted(this.castFailures, 6),
       topKills: counted(this.killedNames, 5),
@@ -220,6 +256,8 @@ export interface BagSnapshot {
   casts: number;
   interrupts: number;
   kills: number;
+  /** units that died in this bag's window, whoever killed them */
+  fieldKills: number;
   deaths: number;
   myDeaths: number;
   /** distinct players who died (deaths counts events; one player can die several times) */
@@ -232,6 +270,8 @@ export interface BagSnapshot {
   topAbilities: AbilityStat[];
   topHealing: AbilityStat[];
   topDamageTaken: AbilityStat[];
+  /** casts per spell id, largest first: ranks of one spell are separate entries */
+  topCasts: CastStat[];
   misses: [string, number][];
   castFailures: [string, number][];
   topKills: [string, number][];
@@ -615,6 +655,7 @@ export class Aggregator {
         if (this.isMine(ev.srcFlags, ev.srcGuid)) {
           for (const bag of bags) {
             bag.casts++;
+            bag.addCast(ev.spellId, ev.spellName);
             bag.markActivity(ms);
           }
         }
@@ -667,6 +708,9 @@ export class Aggregator {
             bag.kills++;
             bag.bump(bag.killedNames, ev.name || 'unknown');
           }
+          // Field kills are not "yours": they are what died around you. Enemies in PvP are
+          // counted as your kills only via the last-hit rule above, never here.
+          if (!isPlayer) bag.fieldKills++;
           bag.markActivity(ms);
         }
         return;

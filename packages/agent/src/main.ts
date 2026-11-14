@@ -14,6 +14,8 @@ import { discover, type InstallInfo } from './discover';
 import { scan } from './scan';
 import { startServer } from './server';
 import { Store } from './store';
+import { parseMembers, sampleTracked } from './tracking';
+import { itemIdsIn, refreshItemNames } from './items';
 
 function arg(name: string, fallback: string | null = null): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -60,7 +62,7 @@ function describe(installs: InstallInfo[]): string {
 async function main(): Promise<void> {
   const once = flag('once');
   const shouldOpen = flag('open') || flag('mvp');
-  const force = flag('rebuild');
+  let force = flag('rebuild');
   const port = Number(arg('port', '48120'));
   const dbPath = arg('db', defaultDbPath()) ?? defaultDbPath();
   const installArg = arg('install');
@@ -78,6 +80,13 @@ async function main(): Promise<void> {
   }
 
   const store = new Store(dbPath);
+  // Per-run ability detail cannot be derived from what an older database stored, so a schema bump
+  // costs one full re-read rather than a table that is silently empty on the run page.
+  const backfill = store.needsDetailBackfill();
+  if (backfill) {
+    console.log('portalstone: deriving per-run detail, re-reading logs once');
+    force = true;
+  }
   let last = { at: 0, entries: 0, errors: 0 };
 
   const runScan = async (): Promise<void> => {
@@ -91,9 +100,29 @@ async function main(): Promise<void> {
     console.log(
       `scan: ${entries.length} log file(s), ${changed} updated, ${last.errors} error(s) · ${Date.now() - t0} ms`,
     );
+    // Tracked SavedVariables properties are sampled per flush, so this is cheap when nothing moved.
+    const samples = sampleTracked(store, installs);
+    for (const s of samples.filter((r) => r.recorded)) {
+      console.log(`  tracked: ${s.metric.label} = ${s.value} (${s.instances} instance${s.instances === 1 ? '' : 's'})`);
+    }
+    for (const s of samples.filter((r) => !r.recorded && r.reason !== 'already stored for this flush')) {
+      console.log(`  tracked: ${s.metric.label} not sampled — ${s.reason}`);
+    }
+    // Item names are optional and cached: this only asks for ids still unknown, a few per scan.
+    const itemIds = store
+      .trackedMetrics()
+      .filter((m) => m.kind === 'set')
+      .flatMap((m) => itemIdsIn(parseMembers(store.latestSample(m.id)?.members)));
+    if (itemIds.length > 0) {
+      const names = await refreshItemNames(store, itemIds);
+      if (names.added > 0) console.log(`  names: +${names.added} (${names.sources.join(', ') || 'cache'}), ${names.missing} still unknown`);
+    }
   };
 
   await runScan();
+  // Only record the new schema once every log re-read cleanly: a log that failed must get the
+  // full-rebuild path again next start rather than leave a hole in the detail.
+  if (backfill && last.errors === 0) store.markDetailSchema();
   if (once) {
     store.close();
     return;

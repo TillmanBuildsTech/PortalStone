@@ -10,3 +10,5 @@ export * from './combatlog/fields';
 export * from './combatlog/ingest';
 export * from './combatlog/layout';
 export * from './combatlog/timestamp';
+export * from './savedvars/lua';
+export * from './savedvars/shape';
