@@ -6,6 +6,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { InstallInfo } from './discover';
 import type { SessionRow, Store } from './store';
+import { throughput } from '../../core/src/throughput';
 
 const PROVIDERS: Record<string, { id: string; caps: string[] }> = {
   'Attune.lua': { id: 'sv.attune', caps: ['progression.attunement', 'roster.levels'] },
@@ -63,6 +64,7 @@ function runsTable(store: Store, sessionId: number): string {
         <td>${dur(r.duration_s)}</td>
         <td>${dur(r.engaged_s)}</td>
         <td>${num(r.damage_done)}</td>
+        <td>${num(r.healing_done)}</td>
         <td>${num(r.kills)}</td>
         <td>${num(r.my_deaths)}</td>
         <td>${num(r.field_deaths)}</td>
@@ -70,8 +72,8 @@ function runsTable(store: Store, sessionId: number): string {
     )
     .join('');
   return `<h2>activity</h2><table><thead><tr><th>zone</th><th>when</th><th>length</th>
-    <th>in combat</th><th>damage</th><th>kills</th><th>your deaths</th><th>field deaths</th>
-    </tr></thead><tbody>${rows}</tbody></table>
+    <th>in combat</th><th>damage</th><th>healing</th><th>kills</th><th>your deaths</th>
+    <th>field deaths</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="sub" style="margin-top:6px">one row per zone entry: dungeons, battlegrounds and
     zones are all separated here, and field deaths are everyone's, not just yours.</div>`;
 }
@@ -149,6 +151,7 @@ function renderRuns(store: Store, lastScan: ServerOptions['lastScan']): string {
         <td>${dur(r.duration_s)}</td>
         <td>${dur(r.engaged_s)}</td>
         <td>${num(r.damage_done)}</td>
+        <td>${num(r.healing_done)}</td>
         <td>${num(r.damage_taken)}</td>
         <td>${num(r.kills)}</td>
         <td>${num(r.my_deaths)}</td>
@@ -168,7 +171,8 @@ function renderRuns(store: Store, lastScan: ServerOptions['lastScan']): string {
        runs.length === 0
          ? '<div class="notice">No zone visits recorded yet.</div>'
          : `<table><thead><tr><th>zone</th><th>when</th><th>length</th><th>in combat</th>
-            <th>damage</th><th>taken</th><th>kills</th><th>your deaths</th><th>field deaths</th>
+            <th>damage</th><th>healing</th><th>taken</th><th>kills</th><th>your deaths</th>
+            <th>field deaths</th>
             </tr></thead><tbody>${rows}</tbody></table>`
      }`,
     { refresh: 30 },
@@ -247,12 +251,19 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
   const rows = sessions
     .map((s) => {
       const live = now - (s.end_ms ?? 0) < 5 * 60_000;
+      const row = throughput({
+        damage: s.damage_done,
+        healing: s.healing_done,
+        engagedS: s.engaged_s,
+        activeS: s.active_s,
+        durationS: s.duration_s,
+      });
       return `<tr class="${live ? 'live' : ''}">
         <td><a href="/session?id=${s.id}">${when(s.start_ms, s.offset_min)}</a></td>
         <td>${esc(s.zone_name || '—')}${s.zones_count > 1 ? ` <span class="pill">+${s.zones_count - 1}</span>` : ''}</td>
         <td>${dur(s.duration_s)}</td>
-        <td>${num(Math.round(s.damage_done / Math.max(s.engaged_s || s.active_s || s.duration_s, 1)))}</td>
-        <td>${num(s.damage_done)}</td>
+        <td>${num(row.rate)} <span class="sub">${row.kind === 'healing' ? 'hps' : 'dps'}</span></td>
+        <td>${num(row.total)} <span class="sub">${row.kind === 'healing' ? 'heal' : 'dmg'}</span></td>
         <td>${num(s.damage_taken)}</td>
         <td>${num(s.kills)}</td>
         <td>${num(s.my_deaths)}</td>
@@ -276,7 +287,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
     </div>
     <h2>sessions</h2>
     <table><thead><tr>
-      <th>when</th><th>zone</th><th>length</th><th>dps</th><th>damage</th>
+      <th>when</th><th>zone</th><th>length</th><th>rate</th><th>output</th>
       <th>taken</th><th>kills</th><th>your deaths</th><th>casts</th><th>fights</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   return page('Sessions', body, { refresh: 20 });
@@ -290,9 +301,15 @@ function renderSession(store: Store, id: number): string {
   // DPS is measured over time actually spent fighting (gaps of <=5s count), not wall-clock:
   // a leveling session is mostly travel, and dividing by 6h would report a meaningless 10 dps.
   const basis = s.engaged_s > 0 ? s.engaged_s : s.active_s > 0 ? s.active_s : s.duration_s;
-  const dps = basis > 0 ? Math.round(s.damage_done / basis) : 0;
   const dtps = basis > 0 ? Math.round(s.damage_taken / basis) : 0;
-  const hps = basis > 0 ? Math.round(s.healing_done / basis) : 0;
+  // Which number leads: a healer's damage is incidental, a damage dealer's healing is a bandage.
+  const t = throughput({
+    damage: s.damage_done,
+    healing: s.healing_done,
+    engagedS: s.engaged_s,
+    activeS: s.active_s,
+    durationS: s.duration_s,
+  });
 
   const abilityRows = abilities
     .map(
@@ -304,25 +321,40 @@ function renderSession(store: Store, id: number): string {
     .join('');
 
   const encRows = encounters
-    .map(
-      (e) =>
-        `<tr><td>${esc(e.boss_name)}</td><td>${e.success === 1 ? 'kill' : e.success === 0 ? 'wipe' : 'open'}</td>
-         <td>${dur(Number(e.duration_s))}</td><td>${num(Number(e.damage_done))}</td>
-         <td>${num(Number(e.healing_done))}</td>
-         <td>${num(Number(e.dps))}</td><td>${num(Number(e.deaths))}</td></tr>`,
-    )
+    .map((e) => {
+      const len = Number(e.duration_s);
+      // Per fight, the basis is the fight's own length, so a 68s heal-off is not diluted by trash.
+      const ft = throughput({
+        damage: Number(e.damage_done),
+        healing: Number(e.healing_done),
+        engagedS: len,
+        activeS: len,
+        durationS: len,
+      });
+      const bold = (v: number, mirrored: boolean): string =>
+        mirrored === (ft.kind === 'damage') ? `<strong>${num(v)}</strong>` : num(v);
+      return `<tr><td>${esc(e.boss_name)}</td>
+         <td>${e.success === 1 ? 'kill' : e.success === 0 ? 'wipe' : 'open'}</td>
+         <td>${dur(len)}</td>
+         <td>${bold(Number(e.damage_done), true)}</td>
+         <td>${bold(Number(e.healing_done), false)}</td>
+         <td>${num(ft.kind === 'damage' ? ft.rate : Math.round(Number(e.damage_done) / Math.max(len, 1)))}</td>
+         <td>${num(ft.kind === 'healing' ? ft.rate : Math.round(Number(e.healing_done) / Math.max(len, 1)))}</td>
+         <td>${num(Number(e.deaths))}</td></tr>`;
+    })
     .join('');
 
   const body = `
     <h1>${esc(s.zone_name || 'Unknown zone')}</h1>
     <div class="sub">${dayLabel(s.start_ms, s.offset_min)} ${when(s.start_ms, s.offset_min)} →
       ${when(s.end_ms, s.offset_min)} · ${dur(s.duration_s)} ·
-      ${esc(s.character_name || '')} · <a href="/">all sessions</a></div>
+      ${esc(s.character_name || '')} ·
+      <span class="pill">${t.mixed ? 'mixed' : `${t.kind}-led`}</span> ·
+      <a href="/">all sessions</a></div>
     <div class="cards">
-      <div class="card"><div class="k">dps (in combat)</div><div class="v">${num(dps)}</div></div>
-      <div class="card"><div class="k">damage done</div><div class="v">${num(s.damage_done)}</div></div>
-      <div class="card"><div class="k">healing done</div><div class="v">${num(s.healing_done)}</div></div>
-      <div class="card"><div class="k">hps (in combat)</div><div class="v">${num(hps)}</div></div>
+      <div class="card"><div class="k">${t.kind} per second</div><div class="v">${num(t.rate)}</div></div>
+      <div class="card"><div class="k">${t.kind} done</div><div class="v">${num(t.total)}</div></div>
+      <div class="card"><div class="k">${t.otherKind} done</div><div class="v">${num(t.otherTotal)}</div></div>
       <div class="card"><div class="k">damage taken</div><div class="v">${num(s.damage_taken)}</div></div>
       <div class="card"><div class="k">dtps</div><div class="v">${num(dtps)}</div></div>
       <div class="card"><div class="k">in combat</div><div class="v">${dur(s.engaged_s)}</div></div>
@@ -336,7 +368,7 @@ function renderSession(store: Store, id: number): string {
     ${
       encounters.length
         ? `<h2>fights</h2><table><thead><tr><th>boss</th><th>result</th><th>length</th>
-             <th>damage</th><th>healing</th><th>dps</th><th>deaths</th></tr></thead>
+             <th>damage</th><th>healing</th><th>dps</th><th>hps</th><th>deaths</th></tr></thead>
              <tbody>${encRows}</tbody></table>`
         : ''
     }
