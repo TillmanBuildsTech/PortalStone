@@ -25,9 +25,15 @@ export interface MakeLogOptions {
   year?: number | null;
   offsetMin?: number;
   zone?: { id: number; name: string } | null;
+  /** a second zone, entered mid-log: damage after it is attributed to that zone */
+  zone2?: { id: number; name: string } | null;
+  /** casts emitted before the zone change, so the session begins in the first zone */
+  zone1Casts?: number;
   encounter?: { id: number; name: string; difficulty: number; size: number; success: boolean } | null;
   playerDamage?: number[];
   bossDamage?: number[];
+  /** kill another player (PvP): damage it, then it dies to you */
+  enemyPlayerKills?: number;
   /** autoattack damage; `swingEvents` decides which event names carry it */
   swingDamage?: number[];
   swingEvents?: 'both' | 'roll' | 'landed';
@@ -46,6 +52,7 @@ const PLAYER_GUID = 'Player-4385-0A1B2C3D';
 const PLAYER_NAME = 'Slouch';
 const BOSS_GUID = 'Creature-0-4385-1234-00001-ABCD';
 const BOSS_NAME = 'Ragnaros';
+const ENEMY_GUID = 'Player-9999-0000ENEMY';
 
 const MINE = '0x0000000000000511';
 const HOSTILE = '0x00000a48';
@@ -148,6 +155,16 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     );
   }
 
+  if (opts.zone1Casts) {
+    // events in the first zone, so the session starts there before the zone change
+    for (let i = 0; i < opts.zone1Casts; i++) {
+      line(`SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PLAYER_GUID).join(',')}`);
+    }
+  }
+  if (opts.zone2) {
+    line(`ZONE_CHANGE,${opts.zone2.id},"${opts.zone2.name}"`);
+  }
+
   for (const amount of opts.playerDamage ?? []) {
     line(
       `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
@@ -192,6 +209,15 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     // The unit that dies is the one the player has been hitting, so last-hit attribution works.
     line(
       `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,0000000000000000,"nil",0x80000000,0x80000000,0`,
+    );
+  }
+  for (let i = 0; i < (opts.enemyPlayerKills ?? 0); i++) {
+    // PvP: damage an enemy player, then it dies. This must count as a kill, not just a death.
+    line(
+      `SPELL_DAMAGE,${header().join(',')},${ENEMY_GUID},"Red-Tester-PvP-US",${flagsOf(opts, '0x00000548')},0x0,133,"Fireball",0x4,${block(ENEMY_GUID).join(',')},${damagePayload(opts, 900, 4, true).join(',')}`,
+    );
+    line(
+      `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}0000000000000000,"nil",0x80000000,0x80000000,${ENEMY_GUID},"Red-Tester-PvP-US",${flagsOf(opts, '0x00000548')},0x80000000,0`,
     );
   }
   if (opts.playerDeath) {

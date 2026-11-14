@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS session (
   my_deaths INTEGER NOT NULL DEFAULT 0,
   casts INTEGER NOT NULL DEFAULT 0,
   interrupts INTEGER NOT NULL DEFAULT 0,
+  zones TEXT,
   character_guid TEXT,
   character_name TEXT,
   ingested_ms INTEGER NOT NULL,
@@ -96,6 +97,8 @@ export interface LogState {
   mtime_ms: number;
   offset: number;
   layout: string | null;
+  build: string | null;
+  advanced: number | null;
   last_error: string | null;
 }
 
@@ -118,6 +121,7 @@ export interface SessionRow {
   casts: number;
   interrupts: number;
   character_name: string | null;
+  zones: string | null;
   encounters: number;
 }
 
@@ -132,6 +136,9 @@ export class Store {
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
+    // Migrations for databases created by earlier builds. Cheap and safe: add missing columns.
+    const cols = this.db.prepare('PRAGMA table_info(session)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'zones')) this.db.exec('ALTER TABLE session ADD COLUMN zones TEXT');
   }
 
   close(): void {
@@ -151,7 +158,7 @@ export class Store {
 
   logState(path: string): LogState | undefined {
     return this.db
-      .prepare('SELECT path, bytes, mtime_ms, offset, layout, last_error FROM log_file WHERE path = ?')
+      .prepare('SELECT path, bytes, mtime_ms, offset, layout, build, advanced, last_error FROM log_file WHERE path = ?')
       .get(path) as LogState | undefined;
   }
 
@@ -217,12 +224,15 @@ export class Store {
       }
       const now = Date.now();
       for (const s of sessions) {
+        // The interesting zone is the one where the fighting happened, not the one the player
+        // logged out in: a battleground session should say "Warsong Gulch", not "Tirisfal Glades".
+        const primary = primaryZone(s);
         const info = this.db
           .prepare(
-            `INSERT INTO session (log_path, start_ms, end_ms, offset_min, zone_id, zone_name,
+            `INSERT INTO session (log_path, start_ms, end_ms, offset_min, zone_id, zone_name, zones,
                duration_s, active_s, engaged_s, damage_done, damage_taken, healing_done, overheal,
                kills, deaths, my_deaths, casts, interrupts, character_guid, character_name, ingested_ms)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           )
           .run(
             logPath,
@@ -230,7 +240,8 @@ export class Store {
             s.endMs,
             s.offsetMin,
             s.zoneId,
-            s.zoneName,
+            primary,
+            JSON.stringify(s.zones),
             round((s.endMs - s.startMs) / 1000),
             round(s.open.durationS),
             round(s.open.engagedS),
@@ -332,4 +343,11 @@ export class Store {
 
 function round(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/** Zone with the most damage, falling back to the most time spent. */
+function primaryZone(s: SessionSnapshot): string {
+  if (!s.zones || s.zones.length === 0) return s.zoneName;
+  const best = [...s.zones].sort((a, b) => b.damage - a.damage || b.ms - a.ms)[0];
+  return best?.name ?? s.zoneName;
 }

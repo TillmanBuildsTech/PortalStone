@@ -51,6 +51,8 @@ export interface SessionSnapshot {
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
+  /** zones visited, with time and damage spent in each */
+  zones: { name: string; ms: number; damage: number }[];
   open: BagSnapshot;
   encounters: (BagSnapshot & {
     bossId: number;
@@ -358,6 +360,7 @@ function snapshotSession(s: SessionResult): SessionSnapshot {
     offsetMin: s.offsetMin,
     zoneId: s.zoneId,
     zoneName: s.zoneName,
+    zones: s.zones.map((z) => ({ name: z.name, ms: Math.round(z.ms), damage: z.damage })),
     open: s.open.snapshot(),
     encounters: s.encounters.map((e) => ({
       ...e.bag.snapshot(),

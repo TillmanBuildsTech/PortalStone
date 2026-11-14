@@ -51,6 +51,27 @@ function when(ms: number | null | undefined, offsetMin = 0): string {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
+/** Where the session actually happened: zones with time and damage, biggest first. */
+function zoneTable(s: SessionRow): string {
+  let zones: { name: string; ms: number; damage: number }[] = [];
+  try {
+    zones = s.zones ? (JSON.parse(s.zones) as typeof zones) : [];
+  } catch {
+    zones = [];
+  }
+  if (zones.length < 2) return '';
+  const rows = [...zones]
+    .sort((a, b) => b.damage - a.damage || b.ms - a.ms)
+    .map(
+      (z) =>
+        `<tr><td>${esc(z.name)}</td><td>${dur(z.ms / 1000)}</td><td>${num(z.damage)}</td>
+         <td>${((100 * (z.ms || 0)) / Math.max(s.duration_s * 1000, 1)).toFixed(0)}%</td></tr>`,
+    )
+    .join('');
+  return `<h2>where the time went</h2><table><thead><tr><th>zone</th><th>time</th>
+    <th>damage</th><th>share</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function dayLabel(ms: number, offsetMin = 0): string {
   const d = new Date(ms + offsetMin * 60_000);
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]!;
@@ -131,7 +152,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
         <td>${num(s.damage_done)}</td>
         <td>${num(s.damage_taken)}</td>
         <td>${num(s.kills)}</td>
-        <td>${num(s.deaths)}</td>
+        <td>${num(s.my_deaths)}</td>
         <td>${num(s.casts)}</td>
         <td>${s.encounters > 0 ? s.encounters : '—'}</td>
       </tr>`;
@@ -153,7 +174,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
     <h2>sessions</h2>
     <table><thead><tr>
       <th>when</th><th>zone</th><th>length</th><th>dps</th><th>damage</th>
-      <th>taken</th><th>kills</th><th>deaths</th><th>casts</th><th>fights</th>
+      <th>taken</th><th>kills</th><th>your deaths</th><th>casts</th><th>fights</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   return page('Sessions', body, { refresh: 20 });
 }
@@ -199,10 +220,12 @@ function renderSession(store: Store, id: number): string {
       <div class="card"><div class="k">dtps</div><div class="v">${num(dtps)}</div></div>
       <div class="card"><div class="k">in combat</div><div class="v">${dur(s.engaged_s)}</div></div>
       <div class="card"><div class="k">kills</div><div class="v">${num(s.kills)}</div></div>
-      <div class="card"><div class="k">deaths</div><div class="v">${num(s.deaths)}</div></div>
+      <div class="card"><div class="k">your deaths</div><div class="v">${num(s.my_deaths)}</div></div>
+      <div class="card"><div class="k">players died</div><div class="v">${num(s.deaths)}</div></div>
       <div class="card"><div class="k">casts</div><div class="v">${num(s.casts)}</div></div>
       <div class="card"><div class="k">interrupts</div><div class="v">${num(s.interrupts)}</div></div>
     </div>
+    ${zoneTable(s)}
     ${
       encounters.length
         ? `<h2>fights</h2><table><thead><tr><th>boss</th><th>result</th><th>length</th>

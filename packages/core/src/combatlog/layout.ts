@@ -155,23 +155,23 @@ export function healValue(
 }
 
 /**
- * Count the `nil` padding at the end of a payload. The block-anchored shape always ends in a run
- * of them, which is what stops an end-anchored candidate from accidentally scoring on it.
+ * The block-anchored shape carries a short run of filler after its numeric payload. That run is
+ * not uniform: it is `nil,nil,nil` on most hits, `0,0,0` on some swings, and `0,0,0,nil,1` when
+ * the off-hand flag is set. So check "are the fields after the payload all small flags or nil"
+ * rather than looking for a specific value — and require that the run exists at all, which is
+ * what separates this shape from an end-anchored line (where the payload is the end of the line).
  */
-function trailingNilCount(params: string[], max = 4): number {
-  let n = 0;
-  for (let i = params.length - 1; i >= 0 && n < max; i--) {
+function hasPayloadPadding(params: string[], tailStart: number): boolean {
+  const coreEnd = tailStart + 7; // amount, total, overkill, school, resisted, blocked, absorbed
+  if (params.length - coreEnd < 2) return false;
+  for (let i = coreEnd; i < params.length; i++) {
     const v = at(params, i);
-    if (v === 'nil') {
-      n++;
-      continue;
-    }
-    if (n === 0 && i === params.length - 1 && v.length > 0 && v.length <= 4 && num(v) === null) {
-      continue; // short trailing tag such as "ST"
-    }
-    break;
+    if (v === '' || v === 'nil') continue;
+    if (v.length <= 4 && num(v) === null) continue; // e.g. the "ST" tag
+    const n = num(v);
+    if (n === null || n < 0 || n > 5) return false; // filler must be a small flag
   }
-  return n;
+  return true;
 }
 
 /** Does this damage event fit the given candidate layout? Returns null when it fits. */
@@ -186,8 +186,8 @@ export function damageFits(event: string, params: string[], cand: Layout): strin
   if (!isHexFlags(at(params, h.dstFlags))) return 'dstFlags is not a flag set';
   if (!isHexFlags(at(params, h.dstRaidFlags))) return 'dstRaidFlags is not a flag set';
 
-  if (cand.mode === 'afterBlock' && trailingNilCount(params) < 2) {
-    return 'no nil padding at the end (not a block-anchored payload)';
+  if (cand.mode === 'afterBlock' && !hasPayloadPadding(params, payloadStart(event, params, cand))) {
+    return 'no filler after the payload (not a block-anchored payload)';
   }
 
   const amount = num(damageValue(event, params, 'amount', cand));

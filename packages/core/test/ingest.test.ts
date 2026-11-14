@@ -169,6 +169,51 @@ describe('ingest — forever shape (payload after a 19-field unit block)', () =>
   }
 });
 
+describe('ingest — PvP kills and zone attribution', () => {
+  it('counts a player killed by me as a kill, and as a death of that player', async () => {
+    const path = file(
+      'pvp.txt',
+      makeLog({
+        format: 'forever',
+        zone: { id: 489, name: 'Warsong Gulch' },
+        encounter: null,
+        playerDamage: [1000, 1000, 1000, 1000, 1000],
+        enemyPlayerKills: 1,
+      }),
+    );
+    const res = await ingest({ path });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const s = res.sessions[0]!;
+    expect(s.open.kills).toBe(1); // the enemy player died to us
+    expect(s.open.deaths).toBe(1); // a player died
+    expect(s.open.myDeaths).toBe(0); // but not us
+  });
+
+  it('attributes damage to the zone it happened in, not the last zone visited', async () => {
+    const path = file(
+      'zones.txt',
+      makeLog({
+        format: 'forever',
+        zone: { id: 1, name: 'Undercity' },
+        zone2: { id: 489, name: 'Warsong Gulch' },
+        zone1Casts: 1,
+        encounter: null,
+        playerDamage: [1000, 1000, 1000, 1000, 1000],
+      }),
+    );
+    const res = await ingest({ path });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const zones = res.sessions[0]!.zones;
+    const wsg = zones.find((z) => z.name === 'Warsong Gulch');
+    expect(wsg).toBeDefined();
+    expect(wsg!.damage).toBe(5000);
+    expect(wsg!.ms).toBeGreaterThan(0);
+    expect(zones.some((z) => z.name === 'Undercity')).toBe(true);
+  });
+});
+
 describe('ingest — incremental tailing', () => {
   it('resumes at a byte offset without re-reading or duplicating', async () => {
     const path = file('resume.txt', makeLog({ ...BASE, playerDamage: [1000, 1000, 1000], bossDamage: [500, 500] }));

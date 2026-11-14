@@ -182,6 +182,14 @@ export interface EncounterResult {
   bag: Bag;
 }
 
+export interface ZoneStat {
+  name: string;
+  /** milliseconds spent in this zone during the session */
+  ms: number;
+  /** damage this character dealt while in this zone */
+  damage: number;
+}
+
 export interface SessionResult {
   kind: 'session';
   startMs: number;
@@ -191,6 +199,9 @@ export interface SessionResult {
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
+  /** every zone visited in this session, with time and damage spent there */
+  zones: ZoneStat[];
+  zoneSince: number;
   open: Bag;
   encounters: EncounterResult[];
 }
@@ -253,6 +264,8 @@ export class Aggregator {
       offsetMin: this.offsetMin ?? 0,
       zoneId: this.zoneId,
       zoneName: this.zoneName,
+      zones: [],
+      zoneSince: ms,
       open: new Bag(),
       encounters: [],
     };
@@ -282,12 +295,27 @@ export class Aggregator {
     this.selfName = name;
   }
 
-  /**
-   * Unmatched swing rolls, held for a moment so a landed twin can cancel them. Forever logs emit
+  /** Unmatched swing rolls, held for a moment so a landed twin can cancel them. Forever logs emit
    * both events for the same swing; counting both inflates autoattack damage by roughly 50%.
    */
   private readonly pendingSwings: DamageEvent[] = [];
   private readonly swingWindowMs = 300;
+
+  private zoneStat(s: SessionResult, name: string): ZoneStat {
+    const key = name || 'unknown';
+    let stat = s.zones.find((z) => z.name === key);
+    if (!stat) {
+      stat = { name: key, ms: 0, damage: 0 };
+      s.zones.push(stat);
+    }
+    return stat;
+  }
+
+  private closeZoneSegment(s: SessionResult, atMs: number): void {
+    const elapsed = atMs - s.zoneSince;
+    if (elapsed > 0) this.zoneStat(s, s.zoneName).ms += elapsed;
+    s.zoneSince = atMs;
+  }
 
   private applyDamage(ev: DamageEvent, ms: number): void {
     const s = this.ensureSession(ms, this.lastByte);
@@ -297,6 +325,7 @@ export class Aggregator {
     if (mineSrc && ev.amount > 0) {
       bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
       bag.markActivity(ms);
+      this.zoneStat(s, s.zoneName).damage += ev.amount;
       this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.spellName });
     }
     if (this.isMine(ev.dstFlags, ev.dstGuid) && ev.amount > 0) {
@@ -345,6 +374,7 @@ export class Aggregator {
     }
 
     if (ev.t === 'zone') {
+      if (this.cur) this.closeZoneSegment(this.cur, ms);
       if (ev.zoneName) this.zoneName = ev.zoneName;
       if (ev.zoneId !== null) this.zoneId = ev.zoneId;
       // A zone change does not end a play session: this player crossed 99 zones in one evening.
@@ -446,11 +476,16 @@ export class Aggregator {
       case 'died': {
         const mine = this.isMine(ev.flags, ev.guid);
         const last = this.lastHitBy.get(ev.guid);
-        if ((ev.flags & FLAG.PLAYER) !== 0) {
+        const isPlayer = (ev.flags & FLAG.PLAYER) !== 0;
+        if (isPlayer) {
           bag.deaths++;
           bag.deathLog.push({ ms, name: ev.name, killer: last?.name ?? 'unknown', mine });
           if (mine) bag.myDeaths++;
-        } else if (last?.mine === true) {
+        }
+        // A kill is a kill, PvE or PvP: if the last hit on this unit was ours, it died to us.
+        // Battleground reports are meaningless without this — player victims were only counted
+        // as deaths before.
+        if (last?.mine === true && ev.guid !== this.selfGuid) {
           bag.kills++;
           bag.bump(bag.killedNames, ev.name || 'unknown');
         }
@@ -465,6 +500,7 @@ export class Aggregator {
       const ev = this.pendingSwings.shift()!;
       this.applyDamage(ev, ev.ms);
     }
+    for (const s of this.sessions) this.closeZoneSegment(s, s.endMs);
     this.closeEncounter(null, this.lastMs);
     if (this.cur && this.lastMs > this.cur.startMs) this.cur.endMs = this.lastMs;
     return { sessions: this.sessions };
