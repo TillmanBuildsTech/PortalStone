@@ -19,6 +19,7 @@ import {
   type Layout,
 } from './layout';
 import { parseTimestamp, splitTimestamp, yearFromFilename } from './timestamp';
+import { zoneKind } from '../zones';
 
 export interface IngestOptions {
   path: string;
@@ -51,8 +52,18 @@ export interface SessionSnapshot {
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
-  /** zones visited, with time and damage spent in each */
-  zones: { name: string; ms: number; damage: number; deaths: number }[];
+  /**
+   * Every zone entry in the session, with its own stats. These are the "runs": one row per
+   * dungeon, raid, battleground or zone visit, so a five-hour evening is not one undifferentiated
+   * blob.
+   */
+  zones: (BagSnapshot & {
+    zoneId: number | null;
+    name: string;
+    kind: string;
+    startMs: number;
+    endMs: number;
+  })[];
   open: BagSnapshot;
   encounters: (BagSnapshot & {
     bossId: number;
@@ -360,7 +371,14 @@ function snapshotSession(s: SessionResult): SessionSnapshot {
     offsetMin: s.offsetMin,
     zoneId: s.zoneId,
     zoneName: s.zoneName,
-    zones: s.zones.map((z) => ({ name: z.name, ms: Math.round(z.ms), damage: z.damage, deaths: z.deaths })),
+    zones: s.zones.map((z) => ({
+      zoneId: z.zoneId,
+      name: z.name,
+      kind: zoneKind(z.name),
+      startMs: z.startMs,
+      endMs: z.endMs,
+      ...z.bag.snapshot(),
+    })),
     open: s.open.snapshot(),
     encounters: s.encounters.map((e) => ({
       ...e.bag.snapshot(),

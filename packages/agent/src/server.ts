@@ -51,28 +51,70 @@ function when(ms: number | null | undefined, offsetMin = 0): string {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-/** Where the session actually happened: zones with time, damage and deaths, biggest first. */
-function zoneTable(s: SessionRow): string {
-  let zones: { name: string; ms: number; damage: number; deaths: number }[] = [];
-  try {
-    zones = s.zones ? (JSON.parse(s.zones) as typeof zones) : [];
-  } catch {
-    zones = [];
-  }
-  if (zones.length < 2) return '';
-  const rows = [...zones]
-    .sort((a, b) => b.damage - a.damage || b.ms - a.ms)
+/** Where the session actually happened: one row per zone visit, in order. */
+function runsTable(store: Store, sessionId: number): string {
+  const runs = store.segments(sessionId);
+  if (runs.length === 0) return '';
+  const rows = runs
     .map(
-      (z) =>
-        `<tr><td>${esc(z.name)}</td><td>${dur(z.ms / 1000)}</td><td>${num(z.damage)}</td>
-         <td>${num(z.deaths)}</td>
-         <td>${((100 * (z.ms || 0)) / Math.max(s.duration_s * 1000, 1)).toFixed(0)}%</td></tr>`,
+      (r) => `<tr>
+        <td>${esc(r.zone_name)}${kindPill(r.kind)}</td>
+        <td>${when(r.start_ms)} → ${when(r.end_ms)}</td>
+        <td>${dur(r.duration_s)}</td>
+        <td>${dur(r.engaged_s)}</td>
+        <td>${num(r.damage_done)}</td>
+        <td>${num(r.kills)}</td>
+        <td>${num(r.my_deaths)}</td>
+        <td>${num(r.field_deaths)}</td>
+      </tr>`,
     )
     .join('');
-  return `<h2>where the time went</h2><table><thead><tr><th>zone</th><th>time</th>
-    <th>your damage</th><th>field deaths</th><th>time share</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="sub" style="margin-top:6px">field deaths are players dying around you — everyone's,
-    not yours. Your own deaths are the card above.</div>`;
+  return `<h2>activity</h2><table><thead><tr><th>zone</th><th>when</th><th>length</th>
+    <th>in combat</th><th>damage</th><th>kills</th><th>your deaths</th><th>field deaths</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <div class="sub" style="margin-top:6px">one row per zone entry: dungeons, battlegrounds and
+    zones are all separated here, and field deaths are everyone's, not just yours.</div>`;
+}
+
+function kindPill(kind: string): string {
+  if (kind === 'zone') return '';
+  return ` <span class="pill">${esc(kind)}</span>`;
+}
+
+function renderRuns(store: Store, lastScan: ServerOptions['lastScan']): string {
+  const runs = store.recentRuns(80);
+  const last = lastScan();
+  const rows = runs
+    .map(
+      (r) => `<tr>
+        <td><a href="/session?id=${r.session_id}">${esc(r.zone_name)}</a>${kindPill(r.kind)}</td>
+        <td>${when(r.start_ms)}</td>
+        <td>${dur(r.duration_s)}</td>
+        <td>${dur(r.engaged_s)}</td>
+        <td>${num(r.damage_done)}</td>
+        <td>${num(r.damage_taken)}</td>
+        <td>${num(r.kills)}</td>
+        <td>${num(r.my_deaths)}</td>
+        <td>${num(r.field_deaths)}</td>
+      </tr>`,
+    )
+    .join('');
+  const instances = runs.filter((r) => r.kind !== 'zone' && r.kind !== 'city').length;
+  return page(
+    'Runs',
+    `<h1>Runs</h1>
+     <div class="sub">${runs.length} zone visits · ${instances} in instances ·
+       last scan ${last.at ? new Date(last.at).toLocaleTimeString() : 'never'} ·
+       <a href="/">sessions</a> · <a href="/diagnostics">diagnostics</a></div>
+     ${
+       runs.length === 0
+         ? '<div class="notice">No zone visits recorded yet.</div>'
+         : `<table><thead><tr><th>zone</th><th>when</th><th>length</th><th>in combat</th>
+            <th>damage</th><th>taken</th><th>kills</th><th>your deaths</th><th>field deaths</th>
+            </tr></thead><tbody>${rows}</tbody></table>`
+     }`,
+    { refresh: 30 },
+  );
 }
 
 function dayLabel(ms: number, offsetMin = 0): string {
@@ -149,7 +191,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
       const live = now - (s.end_ms ?? 0) < 5 * 60_000;
       return `<tr class="${live ? 'live' : ''}">
         <td><a href="/session?id=${s.id}">${when(s.start_ms, s.offset_min)}</a></td>
-        <td>${esc(s.zone_name || '—')}</td>
+        <td>${esc(s.zone_name || '—')}${s.zones_count > 1 ? ` <span class="pill">+${s.zones_count - 1}</span>` : ''}</td>
         <td>${dur(s.duration_s)}</td>
         <td>${num(Math.round(s.damage_done / Math.max(s.engaged_s || s.active_s || s.duration_s, 1)))}</td>
         <td>${num(s.damage_done)}</td>
@@ -167,7 +209,7 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
     <div class="sub">${sessions.length} session${sessions.length === 1 ? '' : 's'} ·
       last scan ${last.at ? new Date(last.at).toLocaleTimeString() : 'never'}
       ${last.errors ? `· <span class="pill bad">${last.errors} log error</span>` : ''}
-      · <a href="/diagnostics">diagnostics</a></div>
+      · <a href="/runs">runs</a> · <a href="/diagnostics">diagnostics</a></div>
     <div class="cards">
       <div class="card"><div class="k">damage done</div><div class="v">${num(totals.damage)}</div></div>
       <div class="card"><div class="k">kills</div><div class="v">${num(totals.kills)}</div></div>
@@ -228,7 +270,7 @@ function renderSession(store: Store, id: number): string {
       <div class="card"><div class="k">casts</div><div class="v">${num(s.casts)}</div></div>
       <div class="card"><div class="k">interrupts</div><div class="v">${num(s.interrupts)}</div></div>
     </div>
-    ${zoneTable(s)}
+    ${runsTable(store, id)}
     ${
       encounters.length
         ? `<h2>fights</h2><table><thead><tr><th>boss</th><th>result</th><th>length</th>
@@ -327,6 +369,8 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
         const last = opts.lastScan();
         body = JSON.stringify({ totals, sessions: store.listSessions(50), lastScan: last }, null, 2);
         type = 'application/json; charset=utf-8';
+      } else if (url.pathname === '/runs') {
+        body = renderRuns(store, opts.lastScan);
       } else if (url.pathname === '/diagnostics') {
         body = renderDiagnostics(store, installs, opts);
       } else if (url.pathname === '/session') {

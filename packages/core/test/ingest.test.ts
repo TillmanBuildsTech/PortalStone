@@ -209,9 +209,13 @@ describe('ingest — PvP kills and zone attribution', () => {
     const zones = res.sessions[0]!.zones;
     const wsg = zones.find((z) => z.name === 'Warsong Gulch');
     expect(wsg).toBeDefined();
-    expect(wsg!.damage).toBe(5000);
-    expect(wsg!.ms).toBeGreaterThan(0);
+    expect(wsg!.damageDone).toBe(5000);
+    expect(wsg!.kind).toBe('battleground'); // classified by name
+    expect(wsg!.endMs - wsg!.startMs).toBeGreaterThan(0);
     expect(zones.some((z) => z.name === 'Undercity')).toBe(true);
+    // the segments tile the session: their durations add up to it
+    const covered = zones.reduce((a, z) => a + (z.endMs - z.startMs), 0);
+    expect(covered).toBeGreaterThan(0);
   });
 });
 

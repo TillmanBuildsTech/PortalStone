@@ -79,6 +79,26 @@ CREATE TABLE IF NOT EXISTS encounter (
   UNIQUE (session_id, start_ms)
 );
 
+CREATE TABLE IF NOT EXISTS zone_segment (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  zone_id INTEGER,
+  zone_name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'zone',
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  duration_s REAL NOT NULL DEFAULT 0,
+  engaged_s REAL NOT NULL DEFAULT 0,
+  damage_done INTEGER NOT NULL DEFAULT 0,
+  damage_taken INTEGER NOT NULL DEFAULT 0,
+  healing_done INTEGER NOT NULL DEFAULT 0,
+  kills INTEGER NOT NULL DEFAULT 0,
+  my_deaths INTEGER NOT NULL DEFAULT 0,
+  field_deaths INTEGER NOT NULL DEFAULT 0,
+  players_died INTEGER NOT NULL DEFAULT 0,
+  casts INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS session_ability (
   session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
@@ -89,6 +109,8 @@ CREATE TABLE IF NOT EXISTS session_ability (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_start ON session (start_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_segment_session ON zone_segment (session_id);
+CREATE INDEX IF NOT EXISTS idx_segment_start ON zone_segment (start_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_ability_session ON session_ability (session_id);
 `;
 
@@ -101,6 +123,26 @@ export interface LogState {
   build: string | null;
   advanced: number | null;
   last_error: string | null;
+}
+
+export interface SegmentRow {
+  id: number;
+  session_id: number;
+  zone_id: number | null;
+  zone_name: string;
+  kind: string;
+  start_ms: number;
+  end_ms: number;
+  duration_s: number;
+  engaged_s: number;
+  damage_done: number;
+  damage_taken: number;
+  healing_done: number;
+  kills: number;
+  my_deaths: number;
+  field_deaths: number;
+  players_died: number;
+  casts: number;
 }
 
 export interface SessionRow {
@@ -125,6 +167,7 @@ export interface SessionRow {
   character_name: string | null;
   zones: string | null;
   encounters: number;
+  zones_count: number;
 }
 
 export class Store {
@@ -225,6 +268,7 @@ export class Store {
       for (const row of stale) {
         this.db.prepare('DELETE FROM session_ability WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM encounter WHERE session_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM zone_segment WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM session WHERE id = ?').run(row.id);
       }
       const now = Date.now();
@@ -246,7 +290,9 @@ export class Store {
             s.offsetMin,
             s.zoneId,
             primary,
-            JSON.stringify(s.zones),
+            JSON.stringify(
+              s.zones.map((z) => ({ name: z.name, kind: z.kind, startMs: z.startMs, endMs: z.endMs })),
+            ),
             round((s.endMs - s.startMs) / 1000),
             round(s.open.durationS),
             round(s.open.engagedS),
@@ -266,6 +312,33 @@ export class Store {
           );
         const id = Number(info.lastInsertRowid);
         ids.push(id);
+        for (const z of s.zones) {
+          this.db
+            .prepare(
+              `INSERT INTO zone_segment (session_id, zone_id, zone_name, kind, start_ms, end_ms,
+                 duration_s, engaged_s, damage_done, damage_taken, healing_done, kills, my_deaths,
+                 field_deaths, players_died, casts)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            )
+            .run(
+              id,
+              z.zoneId,
+              z.name,
+              z.kind,
+              z.startMs,
+              z.endMs,
+              round((z.endMs - z.startMs) / 1000),
+              round(z.engagedS),
+              z.damageDone,
+              z.damageTaken,
+              z.healingDone,
+              z.kills,
+              z.myDeaths,
+              z.deaths,
+              z.playersDied,
+              z.casts,
+            );
+        }
         for (const a of s.open.topAbilities) {
           this.db
             .prepare('INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)')
@@ -313,7 +386,9 @@ export class Store {
   listSessions(limit = 60): SessionRow[] {
     return this.db
       .prepare(
-        `SELECT s.*, (SELECT COUNT(*) FROM encounter e WHERE e.session_id = s.id) AS encounters
+        `SELECT s.*,
+           (SELECT COUNT(*) FROM encounter e WHERE e.session_id = s.id) AS encounters,
+           (SELECT COUNT(*) FROM zone_segment z WHERE z.session_id = s.id) AS zones_count
          FROM session s ORDER BY s.start_ms DESC LIMIT ?`,
       )
       .all(limit) as unknown as SessionRow[];
@@ -335,6 +410,20 @@ export class Store {
       .all(sessionId) as unknown as Record<string, unknown>[];
   }
 
+  /** Every zone visit in a session, in order: the runs. */
+  segments(sessionId: number): SegmentRow[] {
+    return this.db
+      .prepare('SELECT * FROM zone_segment WHERE session_id = ? ORDER BY start_ms')
+      .all(sessionId) as unknown as SegmentRow[];
+  }
+
+  /** Recent runs across all sessions, newest first. Instances first in the UI's eyes. */
+  recentRuns(limit = 60): SegmentRow[] {
+    return this.db
+      .prepare('SELECT * FROM zone_segment ORDER BY start_ms DESC LIMIT ?')
+      .all(limit) as unknown as SegmentRow[];
+  }
+
   logFiles(): Record<string, unknown>[] {
     return this.db.prepare('SELECT * FROM log_file ORDER BY scanned_ms DESC').all() as unknown as Record<string, unknown>[];
   }
@@ -351,9 +440,14 @@ function round(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-/** Zone with the most damage, falling back to the most time spent. */
+/** Zone with the most time actually spent fighting, then damage, then time present. */
 function primaryZone(s: SessionSnapshot): string {
   if (!s.zones || s.zones.length === 0) return s.zoneName;
-  const best = [...s.zones].sort((a, b) => b.damage - a.damage || b.ms - a.ms)[0];
+  const best = [...s.zones].sort(
+    (a, b) =>
+      b.engagedS - a.engagedS ||
+      b.damageDone - a.damageDone ||
+      b.endMs - b.startMs - (a.endMs - a.startMs),
+  )[0];
   return best?.name ?? s.zoneName;
 }

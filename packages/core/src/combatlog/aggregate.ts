@@ -187,14 +187,13 @@ export interface EncounterResult {
   bag: Bag;
 }
 
-export interface ZoneStat {
+export interface ZoneSegment {
   name: string;
-  /** milliseconds spent in this zone during the session */
-  ms: number;
-  /** damage this character dealt while in this zone */
-  damage: number;
-  /** player deaths observed in this zone (everyone, not just you) */
-  deaths: number;
+  zoneId: number | null;
+  startMs: number;
+  endMs: number;
+  /** everything that happened while in this zone */
+  bag: Bag;
 }
 
 export interface SessionResult {
@@ -206,9 +205,8 @@ export interface SessionResult {
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
-  /** every zone visited in this session, with time and damage spent there */
-  zones: ZoneStat[];
-  zoneSince: number;
+  /** every zone visit in this session, in order, with its own stats */
+  zones: ZoneSegment[];
   open: Bag;
   encounters: EncounterResult[];
 }
@@ -271,8 +269,7 @@ export class Aggregator {
       offsetMin: this.offsetMin ?? 0,
       zoneId: this.zoneId,
       zoneName: this.zoneName,
-      zones: [],
-      zoneSince: ms,
+      zones: [this.newSegment(ms)],
       open: new Bag(),
       encounters: [],
     };
@@ -308,35 +305,67 @@ export class Aggregator {
   private readonly pendingSwings: DamageEvent[] = [];
   private readonly swingWindowMs = 300;
 
-  private zoneStat(s: SessionResult, name: string): ZoneStat {
-    const key = name || 'unknown';
-    let stat = s.zones.find((z) => z.name === key);
-    if (!stat) {
-      stat = { name: key, ms: 0, damage: 0, deaths: 0 };
-      s.zones.push(stat);
-    }
-    return stat;
+  /** Zones whose names overlap are the same place (the client emits both "Hillsbrad" and
+   * "Hillsbrad Foothills" while you ride through). */
+  private sameArea(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return a.startsWith(b) || b.startsWith(a);
   }
 
-  private closeZoneSegment(s: SessionResult, atMs: number): void {
-    const elapsed = atMs - s.zoneSince;
-    if (elapsed > 0) this.zoneStat(s, s.zoneName).ms += elapsed;
-    s.zoneSince = atMs;
+  /**
+   * Close the open zone segment. Segments shorter than 20s with no combat are transit blips
+   * (city gates, sub-zone crossings) and get absorbed into the previous segment rather than
+   * becoming their own row.
+   */
+  private closeSegment(s: SessionResult, atMs: number): void {
+    const seg = s.zones[s.zones.length - 1];
+    if (!seg) return;
+    seg.endMs = Math.max(seg.endMs, atMs);
+    const short = seg.endMs - seg.startMs < 20_000;
+    const empty = seg.bag.damageDone === 0 && seg.bag.kills === 0 && seg.bag.deaths === 0;
+    if (short && empty && s.zones.length > 1) {
+      s.zones.pop();
+      const prev = s.zones[s.zones.length - 1];
+      if (prev) prev.endMs = Math.max(prev.endMs, atMs);
+    }
+  }
+
+  private newSegment(ms: number): ZoneSegment {
+    return {
+      name: this.zoneName || 'unknown',
+      zoneId: this.zoneId,
+      startMs: ms,
+      endMs: ms,
+      bag: new Bag(),
+    };
+  }
+
+  /**
+   * Where an event is counted. The encounter bag (when a pull is open) or the session bag, plus
+   * the zone segment, so a session can report both "the evening" and "the ten minutes in Warsong
+   * Gulch" from one pass. The segment is a second sink, not a second parse.
+   */
+  private sinkBags(s: SessionResult): Bag[] {
+    const primary = this.enc ? this.enc.bag : s.open;
+    const seg = s.zones[s.zones.length - 1];
+    return seg ? [primary, seg.bag] : [primary];
   }
 
   private applyDamage(ev: DamageEvent, ms: number): void {
     const s = this.ensureSession(ms, this.lastByte);
-    const bag = this.enc ? this.enc.bag : s.open;
+    const bags = this.sinkBags(s);
     const mineSrc = this.isMine(ev.srcFlags, ev.srcGuid);
     this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
     if (mineSrc && ev.amount > 0) {
-      bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
-      bag.markActivity(ms);
-      this.zoneStat(s, s.zoneName).damage += ev.amount;
+      for (const bag of bags) {
+        bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
+        bag.markActivity(ms);
+      }
       this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.spellName });
     }
     if (this.isMine(ev.dstFlags, ev.dstGuid) && ev.amount > 0) {
-      bag.addTaken(ev.spellId, ev.spellName, ev.amount);
+      for (const bag of bags) bag.addTaken(ev.spellId, ev.spellName, ev.amount);
     }
     if (!mineSrc && ev.amount > 0) {
       this.lastHitBy.set(ev.dstGuid, { mine: false, name: ev.spellName });
@@ -381,13 +410,23 @@ export class Aggregator {
     }
 
     if (ev.t === 'zone') {
-      if (this.cur) this.closeZoneSegment(this.cur, ms);
+      const next = ev.zoneName || this.zoneName;
+      const cur = this.cur ? this.cur.zones[this.cur.zones.length - 1] : undefined;
+      if (cur && this.sameArea(cur.name, next)) {
+        // Same place under a different label: keep the segment, keep the first name.
+        if (ev.zoneId !== null) this.zoneId = ev.zoneId;
+        return;
+      }
+      if (this.cur) this.closeSegment(this.cur, ms);
       if (ev.zoneName) this.zoneName = ev.zoneName;
       if (ev.zoneId !== null) this.zoneId = ev.zoneId;
-      // A zone change does not end a play session: this player crossed 99 zones in one evening.
-      // It does end an encounter, which cannot legitimately span a zone boundary.
+      // A zone change ends the zone segment and the encounter, but not the play session: this
+      // player crossed 99 zones in one evening, and every real visit is worth its own row.
       this.closeEncounter(null, ms);
-      if (this.cur) this.cur.zoneName = this.zoneName;
+      if (this.cur) {
+        this.cur.zoneName = this.zoneName;
+        this.cur.zones.push(this.newSegment(ms));
+      }
       return;
     }
 
@@ -424,7 +463,7 @@ export class Aggregator {
     // Anything else is activity: it opens/extends a session and may time out an encounter.
     const s = this.ensureSession(ms, this.lastByte);
     if (this.enc && ms - this.enc.bag.lastMs > this.encounterGapMs) this.closeEncounter(null, ms);
-    const bag = this.enc ? this.enc.bag : s.open;
+    const bags = this.sinkBags(s);
 
     switch (ev.t) {
       case 'damage': {
@@ -440,37 +479,47 @@ export class Aggregator {
       }
       case 'heal': {
         if (this.isMine(ev.srcFlags, ev.srcGuid) && ev.amount + ev.overheal > 0) {
-          bag.addHeal(ev.amount, ev.overheal);
-          bag.markActivity(ms);
+          for (const bag of bags) {
+            bag.addHeal(ev.amount, ev.overheal);
+            bag.markActivity(ms);
+          }
         }
         return;
       }
       case 'miss': {
         if (this.isMine(ev.srcFlags, ev.srcGuid)) {
-          bag.bump(bag.misses, ev.missType);
-          bag.markActivity(ms);
+          for (const bag of bags) {
+            bag.bump(bag.misses, ev.missType);
+            bag.markActivity(ms);
+          }
         }
         return;
       }
       case 'cast': {
         if (this.isMine(ev.srcFlags, ev.srcGuid)) {
-          bag.casts++;
-          bag.markActivity(ms);
+          for (const bag of bags) {
+            bag.casts++;
+            bag.markActivity(ms);
+          }
         }
         this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
         return;
       }
       case 'castFailed': {
         if (this.isMine(ev.srcFlags, '')) {
-          bag.bump(bag.castFailures, ev.reason);
-          bag.markActivity(ms);
+          for (const bag of bags) {
+            bag.bump(bag.castFailures, ev.reason);
+            bag.markActivity(ms);
+          }
         }
         return;
       }
       case 'interrupt': {
         if (this.isMine(ev.srcFlags, '')) {
-          bag.interrupts++;
-          bag.markActivity(ms);
+          for (const bag of bags) {
+            bag.interrupts++;
+            bag.markActivity(ms);
+          }
         }
         return;
       }
@@ -484,21 +533,23 @@ export class Aggregator {
         const mine = this.isMine(ev.flags, ev.guid);
         const last = this.lastHitBy.get(ev.guid);
         const isPlayer = (ev.flags & FLAG.PLAYER) !== 0;
-        if (isPlayer) {
-          bag.deaths++;
-          bag.deathLog.push({ ms, name: ev.name, killer: last?.name ?? 'unknown', mine });
-          if (mine) bag.myDeaths++;
-          if (ev.guid) bag.deathVictims.add(ev.guid);
-          this.zoneStat(s, s.zoneName).deaths++;
+        const killedByMe = last?.mine === true && ev.guid !== this.selfGuid;
+        for (const bag of bags) {
+          if (isPlayer) {
+            bag.deaths++;
+            bag.deathLog.push({ ms, name: ev.name, killer: last?.name ?? 'unknown', mine });
+            if (mine) bag.myDeaths++;
+            if (ev.guid) bag.deathVictims.add(ev.guid);
+          }
+          // A kill is a kill, PvE or PvP: if the last hit on this unit was ours, it died to us.
+          // Battleground reports are meaningless without this — player victims were only
+          // counted as deaths before.
+          if (killedByMe) {
+            bag.kills++;
+            bag.bump(bag.killedNames, ev.name || 'unknown');
+          }
+          bag.markActivity(ms);
         }
-        // A kill is a kill, PvE or PvP: if the last hit on this unit was ours, it died to us.
-        // Battleground reports are meaningless without this — player victims were only counted
-        // as deaths before.
-        if (last?.mine === true && ev.guid !== this.selfGuid) {
-          bag.kills++;
-          bag.bump(bag.killedNames, ev.name || 'unknown');
-        }
-        bag.markActivity(ms);
         return;
       }
     }
@@ -509,7 +560,10 @@ export class Aggregator {
       const ev = this.pendingSwings.shift()!;
       this.applyDamage(ev, ev.ms);
     }
-    for (const s of this.sessions) this.closeZoneSegment(s, s.endMs);
+    for (const s of this.sessions) {
+      const last = s.zones[s.zones.length - 1];
+      if (last) last.endMs = Math.max(last.endMs, s.endMs);
+    }
     this.closeEncounter(null, this.lastMs);
     if (this.cur && this.lastMs > this.cur.startMs) this.cur.endMs = this.lastMs;
     return { sessions: this.sessions };
