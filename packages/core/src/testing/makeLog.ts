@@ -27,6 +27,10 @@ export interface MakeLogOptions {
   zone?: { id: number; name: string } | null;
   /** a second zone, entered mid-log: damage after it is attributed to that zone */
   zone2?: { id: number; name: string } | null;
+  /** a change straight back out of zone2, so the fixture can produce A -> B -> A */
+  zone3?: { id: number; name: string } | null;
+  /** damage dealt inside zone2, before the change back: makes the middle zone a real visit */
+  zone2Damage?: number[];
   /** casts emitted before the zone change, so the session begins in the first zone */
   zone1Casts?: number;
   encounter?: { id: number; name: string; difficulty: number; size: number; success: boolean } | null;
@@ -168,6 +172,14 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   }
   if (opts.zone2) {
     line(`ZONE_CHANGE,${opts.zone2.id},"${opts.zone2.name}"`);
+  }
+  for (const amount of opts.zone2Damage ?? []) {
+    line(
+      `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
+    );
+  }
+  if (opts.zone3) {
+    line(`ZONE_CHANGE,${opts.zone3.id},"${opts.zone3.name}"`);
   }
 
   for (const amount of opts.playerDamage ?? []) {

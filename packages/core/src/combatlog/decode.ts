@@ -129,6 +129,7 @@ const IGNORED_EVENTS = new Set([
   'ENCHANT_APPLIED',
   'ENCHANT_REMOVED',
   'PARTY_MEMBER_DIED',
+  'COMBATANT_INFO',
 ]);
 
 export interface DecodeResult {

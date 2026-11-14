@@ -292,6 +292,7 @@ function renderSession(store: Store, id: number): string {
   const basis = s.engaged_s > 0 ? s.engaged_s : s.active_s > 0 ? s.active_s : s.duration_s;
   const dps = basis > 0 ? Math.round(s.damage_done / basis) : 0;
   const dtps = basis > 0 ? Math.round(s.damage_taken / basis) : 0;
+  const hps = basis > 0 ? Math.round(s.healing_done / basis) : 0;
 
   const abilityRows = abilities
     .map(
@@ -307,6 +308,7 @@ function renderSession(store: Store, id: number): string {
       (e) =>
         `<tr><td>${esc(e.boss_name)}</td><td>${e.success === 1 ? 'kill' : e.success === 0 ? 'wipe' : 'open'}</td>
          <td>${dur(Number(e.duration_s))}</td><td>${num(Number(e.damage_done))}</td>
+         <td>${num(Number(e.healing_done))}</td>
          <td>${num(Number(e.dps))}</td><td>${num(Number(e.deaths))}</td></tr>`,
     )
     .join('');
@@ -319,6 +321,8 @@ function renderSession(store: Store, id: number): string {
     <div class="cards">
       <div class="card"><div class="k">dps (in combat)</div><div class="v">${num(dps)}</div></div>
       <div class="card"><div class="k">damage done</div><div class="v">${num(s.damage_done)}</div></div>
+      <div class="card"><div class="k">healing done</div><div class="v">${num(s.healing_done)}</div></div>
+      <div class="card"><div class="k">hps (in combat)</div><div class="v">${num(hps)}</div></div>
       <div class="card"><div class="k">damage taken</div><div class="v">${num(s.damage_taken)}</div></div>
       <div class="card"><div class="k">dtps</div><div class="v">${num(dtps)}</div></div>
       <div class="card"><div class="k">in combat</div><div class="v">${dur(s.engaged_s)}</div></div>
@@ -332,7 +336,8 @@ function renderSession(store: Store, id: number): string {
     ${
       encounters.length
         ? `<h2>fights</h2><table><thead><tr><th>boss</th><th>result</th><th>length</th>
-             <th>damage</th><th>dps</th><th>deaths</th></tr></thead><tbody>${encRows}</tbody></table>`
+             <th>damage</th><th>healing</th><th>dps</th><th>deaths</th></tr></thead>
+             <tbody>${encRows}</tbody></table>`
         : ''
     }
     <h2>damage by ability</h2>

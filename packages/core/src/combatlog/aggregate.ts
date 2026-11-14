@@ -31,6 +31,18 @@ export interface DeathRecord {
   mine: boolean;
 }
 
+/** Fold one ability line into another (used when two segments of the same visit are merged). */
+function mergeAbility(target: Map<number, AbilityStat>, key: number, v: AbilityStat): void {
+  const cur = target.get(key);
+  if (!cur) {
+    target.set(key, { ...v });
+    return;
+  }
+  cur.amount += v.amount;
+  cur.hits += v.hits;
+  cur.crits += v.crits;
+}
+
 export class Bag {
   damageDone = 0;
   damageTaken = 0;
@@ -71,6 +83,41 @@ export class Bag {
   }
 
   lastActivityMs = 0;
+
+  /**
+   * Fold another bag into this one. A zone change can flicker at an instance portal and split one
+   * visit into two segments with the same name; folding them back is the only way the numbers add
+   * up again. Engaged time takes the larger of the two rather than summing, so a gap between the
+   * halves is not invented as combat time.
+   */
+  mergeFrom(other: Bag): void {
+    this.damageDone += other.damageDone;
+    this.damageTaken += other.damageTaken;
+    this.healingDone += other.healingDone;
+    this.overheal += other.overheal;
+    this.hits += other.hits;
+    this.crits += other.crits;
+    this.casts += other.casts;
+    this.interrupts += other.interrupts;
+    this.kills += other.kills;
+    this.deaths += other.deaths;
+    this.myDeaths += other.myDeaths;
+    this.engagedMs = Math.max(this.engagedMs, other.engagedMs);
+    if (other.firstMs) this.firstMs = this.firstMs ? Math.min(this.firstMs, other.firstMs) : other.firstMs;
+    this.lastMs = Math.max(this.lastMs, other.lastMs);
+    this.lastActivityMs = Math.max(this.lastActivityMs, other.lastActivityMs);
+    for (const [key, v] of other.damageByAbility) mergeAbility(this.damageByAbility, key, v);
+    for (const [key, v] of other.takenByAbility) mergeAbility(this.takenByAbility, key, v);
+    for (const [key, v] of other.misses) this.misses.set(key, (this.misses.get(key) ?? 0) + v);
+    for (const [key, v] of other.castFailures) {
+      this.castFailures.set(key, (this.castFailures.get(key) ?? 0) + v);
+    }
+    for (const [key, v] of other.killedNames) {
+      this.killedNames.set(key, (this.killedNames.get(key) ?? 0) + v);
+    }
+    this.deathLog.push(...other.deathLog);
+    for (const victim of other.deathVictims) this.deathVictims.add(victim);
+  }
 
   addDamage(spellId: number, spellName: string, amount: number, isCrit: boolean): void {
     this.damageDone += amount;
@@ -341,6 +388,52 @@ export class Aggregator {
     }
   }
 
+  /**
+   * Drop segments with no activity at all that sit between two visits to the same place — the
+   * client emits a ZONE_CHANGE when you cross an instance portal, and it will happily report the
+   * outside zone for a minute while nothing happens. A live dungeon run showed
+   * "Barrens -> RFK -> Barrens(76s, nothing) -> RFK", which reads as if the player kept leaving.
+   *
+   * Only fully empty segments are dropped: one with any damage, kill, death or cast is a real
+   * visit even if it is short.
+   */
+  private dropNoiseSegments(s: SessionResult): void {
+    if (s.zones.length === 0) return;
+
+    // 1. An empty visit that just flips back to where it came from, or that trails the log with
+    //    nothing in it, is portal noise rather than a run. This has to happen before the merge
+    //    below, or the two halves of one dungeon visit never become adjacent.
+    const kept: ZoneSegment[] = [];
+    const isEmpty = (seg: ZoneSegment): boolean =>
+      seg.bag.damageDone === 0 &&
+      seg.bag.kills === 0 &&
+      seg.bag.deaths === 0 &&
+      seg.bag.casts === 0 &&
+      seg.bag.healingDone === 0;
+    for (let i = 0; i < s.zones.length; i++) {
+      const seg = s.zones[i]!;
+      const prev = kept[kept.length - 1];
+      const next = s.zones[i + 1];
+      const flipsBack = !!prev && !!next && prev.name === next.name;
+      const trailsOff = !next;
+      if (isEmpty(seg) && (flipsBack || trailsOff)) continue;
+      kept.push(seg);
+    }
+
+    // 2. Same place twice in a row is one visit: fold the numbers back together.
+    const merged: ZoneSegment[] = [];
+    for (const seg of kept) {
+      const prev = merged[merged.length - 1];
+      if (prev && prev.name === seg.name) {
+        prev.bag.mergeFrom(seg.bag);
+        prev.endMs = Math.max(prev.endMs, seg.endMs);
+        continue;
+      }
+      merged.push(seg);
+    }
+    s.zones = merged.length > 0 ? merged : [s.zones[0]!];
+  }
+
   private newSegment(ms: number): ZoneSegment {
     return {
       name: this.zoneName || 'unknown',
@@ -577,6 +670,7 @@ export class Aggregator {
     for (const s of this.sessions) {
       const last = s.zones[s.zones.length - 1];
       if (last) last.endMs = Math.max(last.endMs, s.endMs);
+      this.dropNoiseSegments(s);
     }
     this.closeEncounter(null, this.lastMs);
     if (this.cur && this.lastMs > this.cur.startMs) this.cur.endMs = this.lastMs;
