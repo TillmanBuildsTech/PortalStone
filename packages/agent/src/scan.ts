@@ -38,7 +38,7 @@ export async function scan(
           continue;
         }
         const rotated = !!state && state.offset > file.bytes;
-        const offset = rotated ? 0 : (state?.offset ?? 0);
+        let offset = rotated ? 0 : (state?.offset ?? 0);
         let layout: Layout | undefined;
         if (state?.layout && !rotated) {
           try {
@@ -48,11 +48,22 @@ export async function scan(
           }
         }
 
+        // A resumed read starts *after* the ZONE_CHANGE that set the zone, so the re-read session
+        // would begin with no zone at all ("unknown"). Seed it from the session being re-read; if
+        // that is unknown too, re-read the file from the top once and recover it properly.
+        let startZone: { id: number | null; name: string } | undefined;
+        if (offset > 0) {
+          const zone = store.lastSessionZone(file.path);
+          if (zone && zone.name && zone.name !== 'unknown') startZone = zone;
+          else offset = 0;
+        }
+
         const started = Date.now();
         const res = await ingest({
           path: file.path,
           startOffset: offset,
           ...(layout ? { layout } : {}),
+          ...(startZone ? { startZone } : {}),
         });
         const elapsed = Date.now() - started;
 

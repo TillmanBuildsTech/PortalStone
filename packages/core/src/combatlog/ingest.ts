@@ -32,6 +32,11 @@ export interface IngestOptions {
   layout?: Layout;
   /** guids belonging to the player, for logs whose affiliation flags lie */
   selfGuids?: string[];
+  /**
+   * Zone in effect at startOffset. Resuming mid-file skips the ZONE_CHANGE that set it, and a
+   * session whose first segment has no zone is useless, so the caller supplies the last known one.
+   */
+  startZone?: { id: number | null; name: string };
   sessionGapMs?: number;
   encounterGapMs?: number;
   /** stop after this many bytes (0 = whole file) */
@@ -180,6 +185,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
     ...(opts.sessionGapMs !== undefined ? { sessionGapMs: opts.sessionGapMs } : {}),
     ...(opts.encounterGapMs !== undefined ? { encounterGapMs: opts.encounterGapMs } : {}),
     ...(opts.selfGuids !== undefined ? { selfGuids: opts.selfGuids } : {}),
+    ...(opts.startZone !== undefined ? { startZone: opts.startZone } : {}),
   });
 
   let layout: Layout | null = opts.layout ?? null;

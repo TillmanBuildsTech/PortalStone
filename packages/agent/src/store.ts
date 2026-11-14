@@ -235,6 +235,24 @@ export class Store {
     this.db.close();
   }
 
+  /**
+   * Zone in effect at the start of the newest session for a log — i.e. the zone the first segment
+   * of that session carries, not the session's headline zone. This is what a resumed read needs.
+   */
+  lastSessionZone(logPath: string): { id: number | null; name: string } | null {
+    const row = this.db
+      .prepare(
+        `SELECT z.zone_id, z.zone_name
+           FROM zone_segment z JOIN session s ON s.id = z.session_id
+          WHERE s.log_path = ?
+          ORDER BY s.start_ms DESC, z.start_ms ASC
+          LIMIT 1`,
+      )
+      .get(logPath) as { zone_id: number | null; zone_name: string | null } | undefined;
+    if (!row) return null;
+    return { id: row.zone_id, name: row.zone_name ?? '' };
+  }
+
   meta(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;

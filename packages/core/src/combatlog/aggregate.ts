@@ -219,6 +219,8 @@ export interface AggregatorOptions {
   encounterGapMs?: number;
   /** guids belonging to the player, for logs where affiliation flags are unreliable */
   selfGuids?: string[];
+  /** zone already in effect when the first byte is read (resumed reads) */
+  startZone?: { id: number | null; name: string };
 }
 
 export class Aggregator {
@@ -251,6 +253,11 @@ export class Aggregator {
     this.sessionGapMs = opts.sessionGapMs ?? 20 * 60_000;
     this.encounterGapMs = opts.encounterGapMs ?? 60_000;
     this.selfGuids = new Set(opts.selfGuids ?? []);
+    // Resumed reads start after the ZONE_CHANGE, so the caller hands back the zone in effect.
+    if (opts.startZone) {
+      this.zoneId = opts.startZone.id;
+      this.zoneName = opts.startZone.name;
+    }
   }
 
   private get bag(): Bag {
