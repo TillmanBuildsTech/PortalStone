@@ -14,22 +14,31 @@ contract; `privacy/` is the consent and contribution contract.
       src/combatlog/          log reader, layout calibration, decoder, sessionisation
       src/testing/makeLog.ts  synthetic log generator (fixtures and benchmarks)
       src/cli.ts              report / make
+    packages/agent/           the running app: discovery, SQLite store, incremental scan, local UI
+      src/discover.ts         read-only install / flavor / account finder
+      src/store.ts            schema and session replacement (node:sqlite, no native deps)
+      src/scan.ts             incremental ingest loop
+      src/server.ts           server-rendered UI at 127.0.0.1
     privacy/                  consent copy, payload schema, validator
     wowlog.py, probe_sv.py    the prototype these replaced — kept as reference only
 
 ## Status
 
-Phase 0 is done: the parser is rewritten, calibrated against real `_forever_` logs, and tested.
-The agent, storage and UI are not built yet.
+Phase 0 is done and the MVP loop is runnable: the parser is calibrated against real `_forever_`
+logs, and the agent ingests them into SQLite and serves a local UI. See `docs/MVP.md` for what the
+MVP is and how to test it.
 
     npm install
-    npm test                     # 32 tests
-    npm run typecheck
+    npm run mvp                  # scan, open http://127.0.0.1:48120, rescan every 60s
+    npm run scan                 # one pass, no server
+    npm run rebuild              # re-derive everything from raw logs (after a parser change)
+
+    npm test                     # 32 tests (core)
+    npm run typecheck            # core + agent
 
     cd packages/core
     npx tsx src/cli.ts make   /tmp/big.txt --mb 500          # default: forever shape
     npx tsx src/cli.ts report /tmp/big.txt
-    npx tsx src/cli.ts report "/path/to/WoWCombatLog-111226_172753.txt"
 
 `--layout` selects the log shape to generate: `forever` (no infoGUID, 19-field unit block,
 block-anchored payload), `adv19`, `adv10`, `plain`, or `corrupt` (forces a calibration failure).

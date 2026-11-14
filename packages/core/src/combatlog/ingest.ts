@@ -46,6 +46,8 @@ export interface IngestOptions {
 export interface SessionSnapshot {
   startMs: number;
   endMs: number;
+  /** byte offset where this session began (the safe resume point for a growing log) */
+  startByte: number;
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
@@ -109,6 +111,7 @@ interface RawLine {
   offsetMin: number;
   event: string;
   params: string[];
+  byteStart: number;
 }
 
 const DEFAULTS = {
@@ -187,7 +190,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
       const res = decode(r.event, r.params, r.ms, layout);
       if (!res.event) skipped++;
       else if (res.event.t === 'unknown') agg.unrecognised++;
-      else agg.push(res.event, r.offsetMin);
+      else agg.push(res.event, r.offsetMin, r.byteStart);
     }
     buffered.length = 0;
   };
@@ -216,7 +219,15 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
       continue;
     }
     const params = fields.slice(1);
-    const raw: RawLine = { line: l.line, ms: stamp.ms, offsetMin: stamp.offsetMin, event, params };
+    const byteStart = endOffset;
+    const raw: RawLine = {
+      line: l.line,
+      ms: stamp.ms,
+      offsetMin: stamp.offsetMin,
+      event,
+      params,
+      byteStart,
+    };
     endOffset += l.byteLength;
 
     if (!layout) {
@@ -251,7 +262,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
     const res = decode(event, params, stamp.ms, layout);
     if (!res.event) skipped++;
     else if (res.event.t === 'unknown') agg.unrecognised++;
-    else agg.push(res.event, stamp.offsetMin);
+    else agg.push(res.event, stamp.offsetMin, byteStart);
     if (opts.onProgress && lines % 200_000 === 0) opts.onProgress({ bytes, lines });
   }
 
@@ -343,6 +354,7 @@ function snapshotSession(s: SessionResult): SessionSnapshot {
   return {
     startMs: s.startMs,
     endMs: s.endMs,
+    startByte: s.startByte,
     offsetMin: s.offsetMin,
     zoneId: s.zoneId,
     zoneName: s.zoneName,

@@ -186,6 +186,8 @@ export interface SessionResult {
   kind: 'session';
   startMs: number;
   endMs: number;
+  /** byte offset in the log where this session's first event line began (for cheap resume) */
+  startByte: number;
   offsetMin: number;
   zoneId: number | null;
   zoneName: string;
@@ -220,6 +222,8 @@ export class Aggregator {
   private cur: SessionResult | null = null;
   private enc: EncounterResult | null = null;
   private readonly lastHitBy = new Map<string, { mine: boolean; name: string }>();
+  /** byte offset of the line currently being pushed, used to mark where a session began */
+  private lastByte = 0;
   private readonly sessionGapMs: number;
   private readonly encounterGapMs: number;
   private readonly selfGuids: Set<string>;
@@ -231,11 +235,10 @@ export class Aggregator {
   }
 
   private get bag(): Bag {
-    if (this.enc) return this.enc.bag;
-    return this.ensureSession(this.lastMs).open;
+    return this.ensureSession(this.lastMs, this.lastByte).open;
   }
 
-  private ensureSession(ms: number): SessionResult {
+  private ensureSession(ms: number, byteOffset = 0): SessionResult {
     const cur = this.cur;
     if (cur && ms - cur.endMs <= this.sessionGapMs) {
       cur.endMs = ms;
@@ -246,6 +249,7 @@ export class Aggregator {
       kind: 'session',
       startMs: ms,
       endMs: ms,
+      startByte: byteOffset,
       offsetMin: this.offsetMin ?? 0,
       zoneId: this.zoneId,
       zoneName: this.zoneName,
@@ -286,7 +290,7 @@ export class Aggregator {
   private readonly swingWindowMs = 300;
 
   private applyDamage(ev: DamageEvent, ms: number): void {
-    const s = this.ensureSession(ms);
+    const s = this.ensureSession(ms, this.lastByte);
     const bag = this.enc ? this.enc.bag : s.open;
     const mineSrc = this.isMine(ev.srcFlags, ev.srcGuid);
     this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
@@ -320,7 +324,8 @@ export class Aggregator {
     }
   }
 
-  push(ev: LogEvent, offsetMin: number): void {
+  push(ev: LogEvent, offsetMin: number, byteOffset = 0): void {
+    this.lastByte = byteOffset;
     if (ev.t === 'version') {
       if (ev.advanced !== null) this.advanced = ev.advanced;
       if (ev.build) this.build = ev.build;
@@ -350,7 +355,7 @@ export class Aggregator {
     }
 
     if (ev.t === 'encounterStart') {
-      const s = this.ensureSession(ms);
+      const s = this.ensureSession(ms, this.lastByte);
       this.closeEncounter(null, ms);
       const e: EncounterResult = {
         kind: 'encounter',
@@ -374,13 +379,13 @@ export class Aggregator {
         if (ms > this.enc.bag.lastMs) this.enc.bag.lastMs = ms;
         this.enc = null;
       }
-      const s = this.ensureSession(ms);
+      const s = this.ensureSession(ms, this.lastByte);
       s.endMs = ms;
       return;
     }
 
     // Anything else is activity: it opens/extends a session and may time out an encounter.
-    const s = this.ensureSession(ms);
+    const s = this.ensureSession(ms, this.lastByte);
     if (this.enc && ms - this.enc.bag.lastMs > this.encounterGapMs) this.closeEncounter(null, ms);
     const bag = this.enc ? this.enc.bag : s.open;
 

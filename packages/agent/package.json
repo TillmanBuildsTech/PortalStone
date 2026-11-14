@@ -1,0 +1,12 @@
+{
+  "name": "@portalstone/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "scan": "tsx src/main.ts --once",
+    "typecheck": "tsc --noEmit"
+  }
+}
