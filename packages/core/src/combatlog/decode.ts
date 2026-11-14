@@ -58,6 +58,7 @@ export type LogEvent =
       srcFlags: number;
       dstGuid: string;
       dstFlags: number;
+      spellId: number;
       spellName: string;
       /** effective healing as reported by the log */
       amount: number;
@@ -296,6 +297,7 @@ export function decode(event: string, params: string[], ms: number, layout: Layo
         srcFlags: flags(at(params, h.srcFlags)),
         dstGuid: at(params, h.dstGuid),
         dstFlags: flags(at(params, h.dstFlags)),
+        spellId: num(at(params, h.payload)) ?? 0,
         spellName: unquote(at(params, h.payload + 1)) || 'unknown',
         amount: num(healValue(event, params, 'amount', layout)) ?? 0,
         overheal: num(healValue(event, params, 'overheal', layout)) ?? 0,

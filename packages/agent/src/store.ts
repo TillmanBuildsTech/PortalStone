@@ -399,10 +399,14 @@ export class Store {
               z.casts,
             );
         }
+        const insertAbility = this.db.prepare(
+          'INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
+        );
         for (const a of s.open.topAbilities) {
-          this.db
-            .prepare('INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)')
-            .run(id, 'damage', a.id, a.name, a.amount, a.hits);
+          insertAbility.run(id, 'damage', a.id, a.name, a.amount, a.hits);
+        }
+        for (const a of s.open.topHealing) {
+          insertAbility.run(id, 'healing', a.id, a.name, a.amount, a.hits);
         }
         for (const e of s.encounters) {
           this.db

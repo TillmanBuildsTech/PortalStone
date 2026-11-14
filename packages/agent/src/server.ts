@@ -296,7 +296,8 @@ function renderIndex(store: Store, lastScan: ServerOptions['lastScan']): string 
 function renderSession(store: Store, id: number): string {
   const s = store.session(id);
   if (!s) return page('Not found', `<h1>404</h1><p>No session ${esc(id)}. <a href="/">Back</a></p>`);
-  const abilities = store.abilities(id);
+  const abilities = store.abilities(id, 'damage');
+  const heals = store.abilities(id, 'healing');
   const encounters = store.encounters(id);
   // DPS is measured over time actually spent fighting (gaps of <=5s count), not wall-clock:
   // a leveling session is mostly travel, and dividing by 6h would report a meaningless 10 dps.
@@ -311,14 +312,45 @@ function renderSession(store: Store, id: number): string {
     durationS: s.duration_s,
   });
 
-  const abilityRows = abilities
-    .map(
-      (a) =>
-        `<tr><td>${esc(a.name)}</td><td>${num(a.amount)}</td><td>${num(a.hits)}</td>
-         <td>${num(a.hits ? Math.round(a.amount / a.hits) : 0)}</td>
-         <td>${((100 * a.amount) / Math.max(s.damage_done, 1)).toFixed(1)}%</td></tr>`,
-    )
-    .join('');
+  const abilityTable = (
+    label: string,
+    rows: { name: string; amount: number; hits: number }[],
+    total: number,
+    empty: string,
+  ): string => {
+    // Spells of different ranks share a name (Holy Light shows up twice with separate ids), so the
+    // table merges by name: one line per spell a player would recognise. The ids stay in the store.
+    const byName = new Map<string, { name: string; amount: number; hits: number }>();
+    for (const a of rows) {
+      const cur = byName.get(a.name);
+      if (cur) {
+        cur.amount += a.amount;
+        cur.hits += a.hits;
+      } else {
+        byName.set(a.name, { ...a });
+      }
+    }
+    const merged = [...byName.values()].sort((a, b) => b.amount - a.amount);
+    return `<h2>${label}</h2>${
+      merged.length
+        ? `<table><thead><tr><th>ability</th><th>${label.split(' ')[0]}</th><th>hits</th>
+             <th>avg</th><th>share</th></tr></thead>
+           <tbody>${merged
+             .map(
+               (a) =>
+                 `<tr><td>${esc(a.name)}</td><td>${num(a.amount)}</td><td>${num(a.hits)}</td>
+                  <td>${num(a.hits ? Math.round(a.amount / a.hits) : 0)}</td>
+                  <td>${((100 * a.amount) / Math.max(total, 1)).toFixed(1)}%</td></tr>`,
+             )
+             .join('')}</tbody></table>`
+        : `<div class="sub">${empty}</div>`
+    }`;
+  };
+
+  // A healer opens this page for the healing table, a damage dealer for the damage one.
+  const damageTable = abilityTable('damage by ability', abilities, s.damage_done, 'No outgoing damage recorded in this session.');
+  const healingTable = abilityTable('healing by ability', heals, s.healing_done, 'No healing recorded in this session.');
+  const abilitySection = t.kind === 'healing' ? healingTable + damageTable : damageTable + healingTable;
 
   const encRows = encounters
     .map((e) => {
@@ -372,13 +404,7 @@ function renderSession(store: Store, id: number): string {
              <tbody>${encRows}</tbody></table>`
         : ''
     }
-    <h2>damage by ability</h2>
-    ${
-      abilities.length
-        ? `<table><thead><tr><th>ability</th><th>damage</th><th>hits</th><th>avg</th><th>share</th></tr></thead>
-           <tbody>${abilityRows}</tbody></table>`
-        : `<div class="sub">No outgoing damage recorded in this session.</div>`
-    }`;
+    ${abilitySection}`;
   return page(s.zone_name || 'Session', body);
 }
 

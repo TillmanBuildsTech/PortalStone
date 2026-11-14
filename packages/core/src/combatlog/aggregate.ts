@@ -59,6 +59,7 @@ export class Bag {
   firstMs = 0;
   lastMs = 0;
   readonly damageByAbility = new Map<number, AbilityStat>();
+  readonly healingByAbility = new Map<number, AbilityStat>();
   readonly takenByAbility = new Map<number, AbilityStat>();
   readonly misses = new Map<string, number>();
   readonly castFailures = new Map<string, number>();
@@ -107,6 +108,7 @@ export class Bag {
     this.lastMs = Math.max(this.lastMs, other.lastMs);
     this.lastActivityMs = Math.max(this.lastActivityMs, other.lastActivityMs);
     for (const [key, v] of other.damageByAbility) mergeAbility(this.damageByAbility, key, v);
+    for (const [key, v] of other.healingByAbility) mergeAbility(this.healingByAbility, key, v);
     for (const [key, v] of other.takenByAbility) mergeAbility(this.takenByAbility, key, v);
     for (const [key, v] of other.misses) this.misses.set(key, (this.misses.get(key) ?? 0) + v);
     for (const [key, v] of other.castFailures) {
@@ -152,9 +154,17 @@ export class Bag {
     }
   }
 
-  addHeal(amount: number, overheal: number): void {
+  addHeal(spellId: number, spellName: string, amount: number, overheal: number): void {
     this.healingDone += amount;
     this.overheal += overheal;
+    const key = spellId || -1;
+    const cur = this.healingByAbility.get(key);
+    if (cur) {
+      cur.amount += amount;
+      cur.hits++;
+    } else {
+      this.healingByAbility.set(key, { id: spellId, name: spellName, amount, hits: 1, crits: 0 });
+    }
   }
 
   bump(map: Map<string, number>, key: string): void {
@@ -191,6 +201,7 @@ export class Bag {
       dpsEngaged: engagedS > 0 ? round(this.damageDone / engagedS, 1) : 0,
       hps: durS > 0 ? round(this.healingDone / durS, 1) : 0,
       topAbilities: top(this.damageByAbility, 8),
+      topHealing: top(this.healingByAbility, 8),
       topDamageTaken: top(this.takenByAbility, 8),
       misses: counted(this.misses, 6),
       castFailures: counted(this.castFailures, 6),
@@ -219,6 +230,7 @@ export interface BagSnapshot {
   dpsEngaged: number;
   hps: number;
   topAbilities: AbilityStat[];
+  topHealing: AbilityStat[];
   topDamageTaken: AbilityStat[];
   misses: [string, number][];
   castFailures: [string, number][];
@@ -584,7 +596,7 @@ export class Aggregator {
       case 'heal': {
         if (this.isMine(ev.srcFlags, ev.srcGuid) && ev.amount + ev.overheal > 0) {
           for (const bag of bags) {
-            bag.addHeal(ev.amount, ev.overheal);
+            bag.addHeal(ev.spellId, ev.spellName, ev.amount, ev.overheal);
             bag.markActivity(ms);
           }
         }

@@ -31,6 +31,8 @@ export interface MakeLogOptions {
   zone3?: { id: number; name: string } | null;
   /** damage dealt inside zone2, before the change back: makes the middle zone a real visit */
   zone2Damage?: number[];
+  /** heals cast by the player, per spell: exercises healing-by-ability */
+  heals?: { spell?: string; spellId?: number; amount: number; overheal?: number }[];
   /** casts emitted before the zone change, so the session begins in the first zone */
   zone1Casts?: number;
   encounter?: { id: number; name: string; difficulty: number; size: number; success: boolean } | null;
@@ -185,6 +187,13 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   for (const amount of opts.playerDamage ?? []) {
     line(
       `SPELL_DAMAGE,${header().join(',')},${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,133,"Fireball",0x4,${block(BOSS_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
+    );
+  }
+  for (const heal of opts.heals ?? []) {
+    const spellId = heal.spellId ?? 2061;
+    const spell = heal.spell ?? 'Flash Heal';
+    line(
+      `SPELL_HEAL,${header().join(',')},${PLAYER_GUID},${PLAYER_NAME},${flagsOf(opts, MINE)},0x0,${spellId},"${spell}",0x2,${block(PLAYER_GUID).join(',')},${healPayload(opts, heal.amount, heal.overheal ?? 0).join(',')}`,
     );
   }
   for (const amount of opts.bossDamage ?? []) {
