@@ -116,6 +116,20 @@ export function payloadShift(event: string): number {
   return event === 'ENVIRONMENTAL_DAMAGE' ? 1 : 0;
 }
 
+/**
+ * Index of the unit stat block (health/power/position) for layouts that carry one mid-line, or
+ * null when this layout anchors the payload somewhere the block cannot be located.
+ *
+ * Only afterBlock layouts locate it reliably; everything else returns null rather than reading a
+ * position out of a payload field and reporting a confidently wrong distance.
+ */
+export function blockStart(event: string, layout: Layout): number | null {
+  if (layout.mode !== 'afterBlock' || layout.midBlock < 19) return null;
+  const h = headerIndex(layout.infoGuid);
+  const spell = SPELL_PREFIXED.has(event) ? 3 : 0;
+  return h.payload + spell;
+}
+
 /** Index of the first payload field for this event under this layout. */
 export function payloadStart(event: string, params: string[], layout: Layout): number {
   if (layout.mode === 'afterBlock') {
@@ -249,7 +263,14 @@ export function calibrate(samples: CalibrationSample[]): Calibration {
     });
   }
   candidates.sort(
-    (a, b) => b.score - a.score || a.midBlock - b.midBlock || a.trailingExtra - b.trailingExtra,
+    (a, b) =>
+      b.score - a.score ||
+      // Exact ties are common when the payload happens to sit at the end of the line. Prefer the
+      // reading that also locates the stat block: it is strictly more information (positions live
+      // there), and it cannot be wrong about the numbers if it scores the same.
+      Number(b.mode === 'afterBlock') - Number(a.mode === 'afterBlock') ||
+      a.trailingExtra - b.trailingExtra ||
+      a.midBlock - b.midBlock,
   );
   const best = candidates[0]!;
   // A short log may calibrate on fewer samples, but only on a near-perfect score: five matching

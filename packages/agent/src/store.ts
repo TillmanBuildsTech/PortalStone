@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
+import type { CampResult } from '../../core/src/camps';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -99,6 +100,45 @@ CREATE TABLE IF NOT EXISTS zone_segment (
   casts INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS camp (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  log_path TEXT NOT NULL DEFAULT '',
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  zone_name TEXT NOT NULL DEFAULT '',
+  map_id TEXT NOT NULL DEFAULT '',
+  x REAL,
+  y REAL,
+  bag_count INTEGER NOT NULL DEFAULT 0,
+  my_bags INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS camp_bag (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  camp_id INTEGER NOT NULL REFERENCES camp(id) ON DELETE CASCADE,
+  ts_ms INTEGER NOT NULL,
+  guid TEXT,
+  name TEXT,
+  mine INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS camp_attendee (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  camp_id INTEGER NOT NULL REFERENCES camp(id) ON DELETE CASCADE,
+  guid TEXT,
+  name TEXT,
+  first_ms INTEGER NOT NULL,
+  distance_y REAL,
+  basis TEXT NOT NULL DEFAULT 'timing',
+  mine INTEGER NOT NULL DEFAULT 0,
+  spells TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_camp_start ON camp (start_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_camp_log ON camp (log_path, start_ms);
+CREATE INDEX IF NOT EXISTS idx_camp_bag_camp ON camp_bag (camp_id);
+CREATE INDEX IF NOT EXISTS idx_camp_att_camp ON camp_attendee (camp_id);
+
 CREATE TABLE IF NOT EXISTS session_ability (
   session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
@@ -123,6 +163,42 @@ export interface LogState {
   build: string | null;
   advanced: number | null;
   last_error: string | null;
+}
+
+export interface CampBagRow {
+  id: number;
+  camp_id: number;
+  ts_ms: number;
+  guid: string | null;
+  name: string | null;
+  mine: number;
+}
+
+export interface CampAttendeeRow {
+  id: number;
+  camp_id: number;
+  guid: string | null;
+  name: string | null;
+  first_ms: number;
+  distance_y: number | null;
+  basis: 'measured' | 'timing';
+  mine: number;
+  spells: string | null;
+}
+
+export interface CampRow {
+  id: number;
+  log_path: string;
+  start_ms: number;
+  end_ms: number;
+  zone_name: string;
+  map_id: string;
+  x: number | null;
+  y: number | null;
+  bag_count: number;
+  my_bags: number;
+  bags?: CampBagRow[];
+  attendees?: CampAttendeeRow[];
 }
 
 export interface SegmentRow {
@@ -402,6 +478,85 @@ export class Store {
     return this.db
       .prepare('SELECT name, amount, hits FROM session_ability WHERE session_id = ? AND kind = ? ORDER BY amount DESC LIMIT 10')
       .all(sessionId, kind) as unknown as { name: string; amount: number; hits: number }[];
+  }
+
+  /** Sleeping-bag camps for one log, replacing whatever this log produced before. */
+  replaceCamps(logPath: string, camps: CampResult[]): void {
+    this.db.exec('BEGIN');
+    try {
+      const stale = this.db.prepare('SELECT id FROM camp WHERE log_path = ?').all(logPath) as { id: number }[];
+      for (const row of stale) {
+        this.db.prepare('DELETE FROM camp_bag WHERE camp_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM camp_attendee WHERE camp_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM camp WHERE id = ?').run(row.id);
+      }
+      const insertCamp = this.db.prepare(
+        `INSERT INTO camp (log_path, start_ms, end_ms, zone_name, map_id, x, y, bag_count, my_bags)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+      );
+      const insertBag = this.db.prepare(
+        'INSERT INTO camp_bag (camp_id, ts_ms, guid, name, mine) VALUES (?,?,?,?,?)',
+      );
+      const insertAttendee = this.db.prepare(
+        `INSERT INTO camp_attendee (camp_id, guid, name, first_ms, distance_y, basis, mine, spells)
+         VALUES (?,?,?,?,?,?,?,?)`,
+      );
+      for (const camp of camps) {
+        const id = Number(
+          insertCamp.run(
+            logPath,
+            camp.startMs,
+            camp.endMs,
+            camp.zoneName,
+            camp.map,
+            camp.x,
+            camp.y,
+            camp.bags.length,
+            camp.myBags,
+          ).lastInsertRowid,
+        );
+        for (const bag of camp.bags) {
+          insertBag.run(id, bag.ms, bag.guid, bag.name, bag.mine ? 1 : 0);
+        }
+        for (const a of camp.attendees) {
+          insertAttendee.run(
+            id,
+            a.guid,
+            a.name,
+            a.firstMs,
+            a.distanceY,
+            a.basis,
+            a.mine ? 1 : 0,
+            JSON.stringify(a.spells),
+          );
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /** Camps, newest first, with their bags and attendees attached. */
+  camps(limit = 40): CampRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM camp ORDER BY start_ms DESC LIMIT ?')
+      .all(limit) as unknown as CampRow[];
+    for (const row of rows) {
+      row.bags = this.db
+        .prepare('SELECT * FROM camp_bag WHERE camp_id = ? ORDER BY ts_ms')
+        .all(row.id) as unknown as CampBagRow[];
+      row.attendees = this.db
+        .prepare('SELECT * FROM camp_attendee WHERE camp_id = ? ORDER BY first_ms')
+        .all(row.id) as unknown as CampAttendeeRow[];
+    }
+    return rows;
+  }
+
+  /** Camps, newest first, with their bags and attendees attached (alias used by the server). */
+  recentCamps(limit = 40): CampRow[] {
+    return this.camps(limit);
   }
 
   encounters(sessionId: number): Record<string, unknown>[] {

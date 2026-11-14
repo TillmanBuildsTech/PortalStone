@@ -10,7 +10,8 @@
  * value — the prototype's approach — silently drops pet damage and breaks entirely on logs where
  * the player only ever appears as a target.
  */
-import type { LogEvent } from './decode';
+import { BAG_SPELL, type LogEvent } from './decode';
+import { CampCollector } from '../camps';
 import { FLAG } from './fields';
 
 type DamageEvent = Extract<LogEvent, { t: 'damage' }>;
@@ -243,6 +244,8 @@ export class Aggregator {
   private readonly sessionGapMs: number;
   private readonly encounterGapMs: number;
   private readonly selfGuids: Set<string>;
+  /** sleeping bags: who unrolled one, where, and who got buffed inside it */
+  readonly camps = new CampCollector(() => this.selfGuid);
 
   constructor(opts: AggregatorOptions = {}) {
     this.sessionGapMs = opts.sessionGapMs ?? 20 * 60_000;
@@ -411,6 +414,7 @@ export class Aggregator {
 
     if (ev.t === 'zone') {
       const next = ev.zoneName || this.zoneName;
+      this.camps.noteZone(next);
       const cur = this.cur ? this.cur.zones[this.cur.zones.length - 1] : undefined;
       if (cur && this.sameArea(cur.name, next)) {
         // Same place under a different label: keep the segment, keep the first name.
@@ -460,6 +464,12 @@ export class Aggregator {
       return;
     }
 
+    // A camp buff is not combat and must not open a session: people idle at a bag for an hour.
+    if (ev.t === 'campBuff') {
+      this.camps.buff(ev.ms, ev.guid, ev.name, ev.spellName);
+      return;
+    }
+
     // Anything else is activity: it opens/extends a session and may time out an encounter.
     const s = this.ensureSession(ms, this.lastByte);
     if (this.enc && ms - this.enc.bag.lastMs > this.encounterGapMs) this.closeEncounter(null, ms);
@@ -467,6 +477,9 @@ export class Aggregator {
 
     switch (ev.t) {
       case 'damage': {
+        // Position first: swing rolls return early below, and a unit's position is still worth
+        // recording even for a swing we only see half of.
+        if (ev.pos) this.camps.position(ev.srcGuid, ev.ms, ev.pos);
         // Forever emits the same swing twice (a roll and a landed event). Rolls are held until
         // we know whether a landed twin arrives, otherwise every autoattack would count twice.
         if (ev.swing === 'roll') {
@@ -503,6 +516,21 @@ export class Aggregator {
           }
         }
         this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
+        if (ev.pos) {
+          this.camps.position(ev.srcGuid, ms, ev.pos);
+          if (ev.spellId === BAG_SPELL) {
+            this.camps.unroll(ms, {
+              ms,
+              guid: ev.srcGuid,
+              name: ev.srcName,
+              mine: this.isMine(ev.srcFlags, ev.srcGuid),
+              x: ev.pos.x,
+              y: ev.pos.y,
+              map: ev.pos.map,
+              zoneName: this.zoneName,
+            });
+          }
+        }
         return;
       }
       case 'castFailed': {
