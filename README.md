@@ -23,6 +23,8 @@ contract; `privacy/` is the consent and contribution contract.
       src/tracking.ts         samples a chosen addon property into a time series
       src/providers.ts        file -> expected capabilities registry
       src/server.ts           routing; pages live in src/ui/pages
+      src/ui/assets/          dashboard builder script and grid skin (served as-is)
+      src/ui/dashboardData.ts dashboard metric catalog, card data and time windows
     privacy/                  consent copy, payload schema, validator
     wowlog.py, probe_sv.py    the prototype these replaced — kept as reference only
 
@@ -36,6 +38,8 @@ MVP is and how to test it, and `docs/SAVEDVARS.md` for how addon data is read an
     npm run mvp                  # scan, open http://127.0.0.1:48120, rescan every 60s
     #   /          sessions       /session?id=  one session, timeline + runs
     #   /run?id=   one zone visit /runs         every zone visit
+    #   /dashboards  your own views: draggable, resizable, editable cards over
+    #                chosen data, chart type and time window (minutes → days)
     #   /addons    installed addons and what they expose    /addon?f=  property browser
     #   /tracked   properties you chose to track            /bags  /diagnostics
     npm run scan                 # one pass, no server

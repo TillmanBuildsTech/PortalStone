@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { columnChart, distribution, meter, timelineChart } from '../src/ui/charts';
+import { columnChart, distribution, meter, pieChart, timelineChart } from '../src/ui/charts';
 
 /**
  * The charts are strings, so their geometry is testable: a bar that does not scale with its value
@@ -93,5 +93,76 @@ describe('meter', () => {
   it('clamps out-of-range shares', () => {
     expect(meter(2)).toContain('width:100.0%');
     expect(meter(-1)).toContain('width:0.0%');
+  });
+});
+
+describe('pieChart', () => {
+  const data = [
+    { label: 'Razorfen Kraul', value: 60 },
+    { label: 'The Barrens', value: 30 },
+    { label: 'Stormwind', value: 10 },
+  ];
+
+  it('draws one slice and one legend row per positive datum', () => {
+    const svg = pieChart(data);
+    expect(svg.match(/class="slice"/g)).toHaveLength(3);
+    expect(svg.match(/class="pie-label"/g)).toHaveLength(3);
+    expect(svg).toContain('Razorfen Kraul');
+  });
+
+  it('labels shares that add up to 100%', () => {
+    const svg = pieChart(data);
+    const shares = [...svg.matchAll(/· ([\d.]+)%/g)].map((m) => Number(m[1]));
+    expect(shares).toHaveLength(3);
+    expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 1);
+  });
+
+  it('collapses the tail into one "more" slice instead of a spray of wedges', () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ label: `z${i}`, value: 9 - i }));
+    const svg = pieChart(many, { maxSlices: 4 });
+    expect(svg.match(/class="slice"/g)).toHaveLength(4);
+    expect(svg).toContain('6 more');
+  });
+
+  it('draws a single value as a ring, not an arc from a point back to itself', () => {
+    const svg = pieChart([{ label: 'only', value: 5 }]);
+    expect(svg.match(/class="slice"/g)).toHaveLength(1);
+    expect(svg).toContain('<circle class="slice"');
+    expect(svg).not.toContain('NaN');
+  });
+
+  it('drops zero and negative values, and says so when nothing is left', () => {
+    expect(pieChart([{ label: 'zero', value: 0 }, { label: 'negative', value: -3 }])).toContain(
+      'Nothing to chart yet',
+    );
+    const svg = pieChart([{ label: 'zero', value: 0 }, { label: 'real', value: 4 }]);
+    expect(svg.match(/class="slice"/g)).toHaveLength(1);
+    expect(svg).not.toContain('zero');
+  });
+
+  it('uses the caller formatter for values and the total', () => {
+    const svg = pieChart(data, { format: (n) => `${n}g` });
+    expect(svg).toContain('100g');
+  });
+
+  it('moves the key below the donut on a small card and keeps it inside the height', () => {
+    const small = pieChart(data, { width: 300, height: 180 });
+    const swatch = small.match(/<rect x="([\d.]+)" y="[\d.]+" width="7" height="7"/);
+    expect(swatch).not.toBeNull();
+    expect(Number(swatch![1])).toBeLessThan(60); // the below layout starts at the left edge
+    const ys = [...small.matchAll(/class="pie-label"[^>]*y="([\d.]+)"/g)].map((m) => Number(m[1]));
+    expect(Math.max(...ys)).toBeLessThan(180);
+
+    const wide = pieChart(data, { width: 700, height: 220 });
+    const wideSwatch = wide.match(/<rect x="([\d.]+)" y="[\d.]+" width="8" height="8"/);
+    expect(Number(wideSwatch![1])).toBeGreaterThan(300); // the key sits beside the donut
+    expect(wide).toContain('·');
+    expect(small).not.toContain('NaN');
+  });
+
+  it('escapes labels rather than injecting markup', () => {
+    const svg = pieChart([{ label: '<script>alert(1)</script>', value: 1 }]);
+    expect(svg).not.toContain('<script>');
+    expect(svg).toContain('&lt;script&gt;');
   });
 });

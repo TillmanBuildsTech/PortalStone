@@ -56,6 +56,23 @@ export interface MakeLogOptions {
   /** creatures killed by another player: they die, but the last hit is not yours */
   groupKills?: number;
   playerDeath?: boolean;
+  /**
+   * A player who kills *you*: their damage lands, then you die. Without it `playerDeath` has no
+   * killer to name, which is exactly the case the PvP page has to handle.
+   */
+  killer?: { name: string; guid: string };
+  /**
+   * Whose log this is. The default is a fixed fictional player; overriding it lets a test build two
+   * logs for two characters on the same client, which is the case that used to mislabel a session.
+   */
+  player?: { guid: string; name: string };
+  /** wall clock of the first line (epoch ms), so two logs can sit hours apart */
+  startAt?: number;
+  /**
+   * A pet lands the killing blow on you after its owner hit you. The log names the pet, not the
+   * owner, so this is the case where "who killed me" has to reach back to the last player hit.
+   */
+  petBlow?: { name: string; guid: string };
   /** replace the hex flag fields with words, to force calibration failure */
   corruptFlags?: boolean;
   /** seconds between generated events */
@@ -146,7 +163,9 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   const statBlock = format === 'forever' ? 0 : (opts.statBlock ?? 10);
   const advanced = opts.advanced ?? true;
   const step = (opts.stepSeconds ?? 1) * 1000;
-  let wall = Date.UTC(2026, 10, 12, 21, 0, 0, 0);
+  let wall = opts.startAt ?? Date.UTC(2026, 10, 12, 21, 0, 0, 0);
+  const PG = opts.player?.guid ?? PLAYER_GUID;
+  const PN = opts.player?.name ?? PLAYER_NAME;
   const out: string[] = [];
   const stats = (n: number) => Array.from({ length: n }, (_, i) => String(1000 + i));
   const block = (owner: string) => (format === 'forever' ? unitBlock(owner) : stats(statBlock));
@@ -158,8 +177,8 @@ export function makeLog(opts: MakeLogOptions = {}): string {
 
   const header = (): string[] => [
     ...(infoGuid ? ['0000000000000000'] : []),
-    PLAYER_GUID,
-    PLAYER_NAME,
+    PG,
+    PN,
     flagsOf(opts, MINE),
     '0x0',
   ];
@@ -177,7 +196,7 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   if (opts.zone1Casts) {
     // events in the first zone, so the session starts there before the zone change
     for (let i = 0; i < opts.zone1Casts; i++) {
-      line(`SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PLAYER_GUID).join(',')}`);
+      line(`SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PG).join(',')}`);
     }
   }
   if (opts.zone2) {
@@ -203,12 +222,12 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     const spellId = heal.spellId ?? 2061;
     const spell = heal.spell ?? 'Flash Heal';
     line(
-      `SPELL_HEAL,${header().join(',')},${PLAYER_GUID},${PLAYER_NAME},${flagsOf(opts, MINE)},0x0,${spellId},"${spell}",0x2,${block(PLAYER_GUID).join(',')},${healPayload(opts, heal.amount, heal.overheal ?? 0).join(',')}`,
+      `SPELL_HEAL,${header().join(',')},${PG},${PN},${flagsOf(opts, MINE)},0x0,${spellId},"${spell}",0x2,${block(PG).join(',')},${healPayload(opts, heal.amount, heal.overheal ?? 0).join(',')}`,
     );
   }
   for (const amount of opts.bossDamage ?? []) {
     line(
-      `SPELL_DAMAGE,${infoGuid ? '0000000000000000,' : ''}${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,${PLAYER_GUID},"${PLAYER_NAME}",${flagsOf(opts, MINE)},0x0,2170,"Molten Blast",0x4,${block(PLAYER_GUID).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
+      `SPELL_DAMAGE,${infoGuid ? '0000000000000000,' : ''}${BOSS_GUID},"${BOSS_NAME}",${flagsOf(opts, HOSTILE)},0x0,${PG},"${PN}",${flagsOf(opts, MINE)},0x0,2170,"Molten Blast",0x4,${block(PG).join(',')},${damagePayload(opts, amount, 4, true).join(',')}`,
     );
   }
   for (const amount of opts.swingDamage ?? []) {
@@ -229,13 +248,13 @@ export function makeLog(opts: MakeLogOptions = {}): string {
   for (const spell of opts.castSpells ?? []) {
     for (let i = 0; i < spell.count; i++) {
       line(
-        `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,${spell.id},"${spell.name}",0x2,${block(PLAYER_GUID).join(',')}`,
+        `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,${spell.id},"${spell.name}",0x2,${block(PG).join(',')}`,
       );
     }
   }
   for (let i = 0; i < (opts.casts ?? 0); i++) {
     line(
-      `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PLAYER_GUID).join(',')}`,
+      `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,133,"Fireball",0x4,${block(PG).join(',')}`,
     );
   }
   for (let i = 0; i < (opts.interrupts ?? 0); i++) {
@@ -272,9 +291,19 @@ export function makeLog(opts: MakeLogOptions = {}): string {
       `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}0000000000000000,"nil",0x80000000,0x80000000,${ENEMY_GUID},"Red-Tester-PvP-US",${flagsOf(opts, '0x00000548')},0x80000000,0`,
     );
   }
+  if (opts.killer) {
+    line(
+      `SPELL_DAMAGE,${opts.killer.guid},"${opts.killer.name}",0x00000548,0x0,${PG},"${PN}",${flagsOf(opts, MINE)},0x0,133,\"Shadow Bolt\",0x20,${block(PG).join(',')},${damagePayload(opts, 900, 4, true).join(',')}`,
+    );
+  }
+  if (opts.petBlow) {
+    line(
+      `SWING_DAMAGE_LANDED,${opts.petBlow.guid},"${opts.petBlow.name}",0x0000000000001148,0x0,${PG},"${PN}",${flagsOf(opts, MINE)},0x0,${block(PG).join(',')},${damagePayload(opts, 700, 4, false).join(',')}`,
+    );
+  }
   if (opts.playerDeath) {
     line(
-      `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}0000000000000000,"nil",0x80000000,0x80000000,${PLAYER_GUID},"${PLAYER_NAME}",${flagsOf(opts, MINE)},0x80000000,0`,
+      `UNIT_DIED,${infoGuid ? '0000000000000000,' : ''}0000000000000000,"nil",0x80000000,0x80000000,${PG},"${PN}",${flagsOf(opts, MINE)},0x80000000,0`,
     );
   }
   if (opts.encounter) {
@@ -287,10 +316,10 @@ export function makeLog(opts: MakeLogOptions = {}): string {
     if (opts.bag.zone) line(`ZONE_CHANGE,1,"${opts.bag.zone}",0`);
     // The bag itself: the only sleeping-bag event the log records.
     line(
-      `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,429961,"Unroll Bag",0x1,${block(PLAYER_GUID).join(',')}`,
+      `SPELL_CAST_SUCCESS,${header().join(',')},0000000000000000,"nil",0x80000000,0x80000000,429961,"Unroll Bag",0x1,${block(PG).join(',')}`,
     );
     // Camp buffs are self-applied and must never be mistaken for bag events.
-    const selfHeader = `${header().join(',')},${PLAYER_GUID},${PLAYER_NAME},${flagsOf(opts, MINE)},0x0`;
+    const selfHeader = `${header().join(',')},${PG},${PN},${flagsOf(opts, MINE)},0x0`;
     line(`SPELL_AURA_APPLIED,${selfHeader},429959,"Well-Rested",0x1,BUFF`);
     for (const [i, guest] of (opts.bag.guests ?? []).entries()) {
       const guid = `Player-6798-00B4${String(i).padStart(10, '0')}`;

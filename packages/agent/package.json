@@ -9,5 +9,8 @@
     "scan": "tsx src/main.ts --once",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "gridstack": "^14.1.0"
   }
 }

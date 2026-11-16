@@ -53,17 +53,22 @@ export function columnChart(data: ColumnDatum[], opts: ColumnOptions = {}): stri
   if (data.length === 0) return '<div class="empty">Nothing to chart yet.</div>';
   const W = opts.width ?? 960;
   const H = opts.height ?? 190;
-  const top = 18;
+  const tiny = W < 340;
+  const small = W < 470;
+  const top = tiny ? 14 : 18;
   const right = 6;
-  const bottom = 22;
-  const left = 52;
+  const bottom = H < 110 ? 18 : 22;
+  const left = tiny ? 36 : small ? 44 : 52;
   const plotW = W - left - right;
   const plotH = H - top - bottom;
   const max = Math.max(...data.map((d) => d.value), 1);
   const slot = plotW / data.length;
   const barW = Math.max(Math.min(slot * 0.72, 44), 1.5);
-  const showValues = data.length <= 10;
-  const labelEvery = Math.max(1, Math.ceil(data.length / 10));
+  const showValues = data.length <= (tiny ? 4 : small ? 6 : 10) && barW >= 12;
+  // Labels thin out to fit the width available, rather than a fixed count that overlaps on a
+  // narrow card and wastes room on a wide one.
+  const labelWidth = tiny ? 34 : small ? 44 : 54;
+  const labelEvery = Math.max(1, Math.ceil(data.length / Math.max(2, Math.floor(plotW / labelWidth))));
 
   const grid = [1, 0.5].map((f) => {
     const y = top + plotH - plotH * f;
@@ -231,10 +236,12 @@ export function lineChart(points: { t: number; value: number }[], opts: LineOpti
   if (points.length === 0) return '<div class="empty">No samples yet. Log out or /reload in game to write the addon\'s SavedVariables.</div>';
   const W = opts.width ?? 960;
   const H = opts.height ?? 170;
-  const top = 14;
-  const right = 14;
-  const bottom = 22;
-  const left = 74;
+  const tiny = W < 340;
+  const small = W < 470;
+  const top = 12;
+  const right = tiny ? 8 : 14;
+  const bottom = H < 110 ? 18 : 22;
+  const left = tiny ? 44 : small ? 58 : 74;
   const plotW = W - left - right;
   const plotH = H - top - bottom;
   const fmt = opts.format ?? ((n: number) => compact(n));
@@ -256,7 +263,7 @@ export function lineChart(points: { t: number; value: number }[], opts: LineOpti
   const x = (t: number): number => left + (points.length === 1 ? plotW / 2 : ((t - t0) / spanT) * plotW);
   const y = (v: number): number => top + plotH - ((v - min) / span) * plotH;
 
-  const grid = [0, 0.5, 1].map((f) => {
+  const grid = (plotH < 60 ? [0, 1] : [0, 0.5, 1]).map((f) => {
     const v = min + span * f;
     const gy = y(v);
     return `<line x1="${left}" y1="${gy.toFixed(1)}" x2="${W - right}" y2="${gy.toFixed(1)}" class="grid"/>
@@ -270,7 +277,9 @@ export function lineChart(points: { t: number; value: number }[], opts: LineOpti
   const dots = points
     .map(
       (p) =>
-        `<circle cx="${x(p.t).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="${points.length > 60 ? 1.4 : 2.6}"
+        `<circle cx="${x(p.t).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="${
+          points.length > 60 ? 1.4 : tiny ? 2.2 : 2.6
+        }"
           fill="${color}"><title>${esc(fmt(p.value))}</title></circle>`,
     )
     .join('');
@@ -290,6 +299,162 @@ export function lineChart(points: { t: number; value: number }[], opts: LineOpti
     <path d="${area}" fill="${color}" opacity="0.08"/>
     <path d="${line}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round"/>
     ${dots}${xLabels}</svg></div>`;
+}
+
+export interface PieDatum {
+  label: string;
+  value: number;
+  /** 'damage', 'healing' or a zone kind: keeps a slice the same colour it has elsewhere */
+  kind?: string;
+  title?: string;
+}
+
+export interface PieOptions {
+  caption?: string;
+  width?: number;
+  height?: number;
+  /** tooltip and centre-label formatting */
+  format?: (n: number) => string;
+  /** slices beyond this collapse into one "N more" slice; a pie with 20 wedges says nothing */
+  maxSlices?: number;
+}
+
+const PIE_COLORS = ['#6ea8fe', '#56d364', '#ffa657', '#bc8cff', '#ffd166', '#ff7b72', '#5b9aa9', '#c9d1d9'];
+
+/**
+ * Share of a whole, as a donut with its legend beside it.
+ *
+ * Zero and negative values are dropped rather than drawn: a negative slice cannot be a share, and
+ * a zero-width wedge is just noise in the legend. What remains is sorted largest first, so the
+ * reader's eye lands on what dominated before the tail.
+ */
+export function pieChart(data: PieDatum[], opts: PieOptions = {}): string {
+  const positive = data
+    .filter((d) => Number.isFinite(d.value) && d.value > 0)
+    .sort((a, b) => b.value - a.value);
+  if (positive.length === 0) return '<div class="empty">Nothing to chart yet.</div>';
+
+  const W = opts.width ?? 640;
+  const H = opts.height ?? 220;
+  // Wide-but-short cards put the key beside the donut; narrow or tall cards put it below, in one
+  // or two columns. A fixed side legend is what produced horizontal scrolling on a small card.
+  const side = W >= 430 && W >= H * 1.25;
+  const maxSlices = Math.max(2, opts.maxSlices ?? (side ? (W < 520 ? 5 : 7) : W >= 380 ? 6 : 4));
+  let slices: PieDatum[];
+  if (positive.length > maxSlices) {
+    const head = positive.slice(0, maxSlices - 1);
+    const tail = positive.slice(maxSlices - 1);
+    slices = [
+      ...head,
+      {
+        label: `${tail.length} more`,
+        value: tail.reduce((sum, d) => sum + d.value, 0),
+        title: tail.map((d) => d.label).join(', '),
+      },
+    ];
+  } else {
+    slices = positive;
+  }
+
+  const total = slices.reduce((sum, d) => sum + d.value, 0);
+  const fmt = opts.format ?? ((n: number) => compact(n));
+  const fs = W < 340 ? 9 : W < 520 ? 10 : 10.5;
+  const fsStyle = ` style="font-size:${fs}px"`;
+  const sliceColor = (d: PieDatum, i: number): string => (d.kind ? colorFor(d.kind) : PIE_COLORS[i % PIE_COLORS.length]!);
+
+  let cx: number;
+  let cy: number;
+  let R: number;
+  let innerR: number;
+  let legend: string[];
+
+  if (side) {
+    const legendW = Math.min(Math.round(W * 0.5), 320);
+    const plotW = W - legendW;
+    R = Math.max(Math.min(plotW, H) / 2 - 8, 8);
+    innerR = R * 0.58;
+    cx = plotW / 2;
+    cy = H / 2;
+    const rowH = Math.min(26, (H - 12) / slices.length);
+    const top = (H - rowH * slices.length) / 2;
+    const labelChars = Math.max(6, Math.floor((legendW - 110) / (fs * 0.62)));
+    legend = slices.map((d, i) => {
+      const y = top + i * rowH + rowH / 2;
+      const pct = `${((d.value / total) * 100).toFixed(1)}%`;
+      return `<rect x="${plotW + 6}" y="${(y - 4).toFixed(1)}" width="8" height="8" rx="2" fill="${sliceColor(d, i)}"/>
+        <text x="${plotW + 20}" y="${(y + fs * 0.35).toFixed(1)}" class="pie-label"${fsStyle}>${esc(truncate(d.label, labelChars))}</text>
+        <text x="${W - 8}" y="${(y + fs * 0.35).toFixed(1)}" class="pie-value" text-anchor="end"${fsStyle}>${esc(fmt(d.value))} · ${pct}</text>`;
+    });
+  } else {
+    const cols = W >= 380 && slices.length > 2 ? 2 : 1;
+    const rows = Math.ceil(slices.length / cols);
+    const rowH = Math.max(13, Math.min(18, (H * 0.42) / rows));
+    const legendH = rowH * rows;
+    const donutH = Math.max(H - legendH - 2, 24);
+    R = Math.max(Math.min(W / 2 - 8, donutH / 2 - 2), 8);
+    innerR = R * 0.58;
+    cx = W / 2;
+    cy = donutH / 2;
+    const colW = W / cols;
+    const labelChars = Math.max(4, Math.floor((colW - 58) / (fs * 0.6)));
+    legend = slices.map((d, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = col * colW + 2;
+      const y = donutH + row * rowH + rowH / 2;
+      const pct = `${((d.value / total) * 100).toFixed(0)}%`;
+      return `<rect x="${x.toFixed(1)}" y="${(y - 3.5).toFixed(1)}" width="7" height="7" rx="2" fill="${sliceColor(d, i)}"/>
+        <text x="${(x + 11).toFixed(1)}" y="${(y + fs * 0.33).toFixed(1)}" class="pie-label"${fsStyle}>${esc(truncate(d.label, labelChars))}</text>
+        <text x="${(x + colW - 4).toFixed(1)}" y="${(y + fs * 0.33).toFixed(1)}" class="pie-value" text-anchor="end"${fsStyle}>${pct}</text>`;
+    });
+  }
+
+  const wedges: string[] = [];
+  let angle = -Math.PI / 2;
+  slices.forEach((d, i) => {
+    const share = d.value / total;
+    const tip = d.title ?? `${d.label}: ${fmt(d.value)} (${(share * 100).toFixed(1)}%)`;
+    const color = sliceColor(d, i);
+    if (slices.length === 1) {
+      // One value is 100% of itself: a ring, because an arc from a point back to itself is zero.
+      wedges.push(
+        `<circle class="slice" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${((R + innerR) / 2).toFixed(1)}"
+          fill="none" stroke="${color}" stroke-width="${(R - innerR).toFixed(1)}"><title>${esc(tip)}</title></circle>`,
+      );
+    } else {
+      wedges.push(
+        `<path class="slice" d="${donutPath(cx, cy, innerR, R, angle, angle + share * Math.PI * 2)}" fill="${color}"
+          opacity="0.92"><title>${esc(tip)}</title></path>`,
+      );
+    }
+    angle += share * Math.PI * 2;
+  });
+
+  // The hole only carries a label when it has room for one: a long copper string in a small
+  // donut would spill over the ring.
+  const centerText = fmt(total);
+  const centerFits = R >= 26 && centerText.length * (fs + 4) * 0.55 < innerR * 1.6;
+  const center = centerFits
+    ? `<text x="${cx.toFixed(1)}" y="${(cy + fs * 0.2).toFixed(1)}" class="pie-total" text-anchor="middle" style="font-size:${(
+        fs + 4
+      ).toFixed(1)}px">${esc(centerText)}</text>
+        <text x="${cx.toFixed(1)}" y="${(cy + fs + 5).toFixed(1)}" class="pie-caption" text-anchor="middle"${fsStyle}>total</text>`
+    : '';
+
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.caption ?? 'pie chart')}">
+    <title>${esc(opts.caption ?? 'pie chart')}</title>
+    ${wedges.join('')}${center}${legend.join('')}</svg></div>`;
+}
+
+/** A donut wedge: outer arc clockwise, inner arc back, so the hole stays empty. */
+function donutPath(cx: number, cy: number, r0: number, r1: number, a0: number, a1: number): string {
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  const at = (r: number, a: number): [number, number] => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const [x0, y0] = at(r1, a0);
+  const [x1, y1] = at(r1, a1);
+  const [x2, y2] = at(r0, a1);
+  const [x3, y3] = at(r0, a0);
+  return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r1.toFixed(2)},${r1.toFixed(2)} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)} A${r0.toFixed(2)},${r0.toFixed(2)} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)} Z`;
 }
 
 function truncate(s: string, n: number): string {

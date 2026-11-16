@@ -14,8 +14,10 @@ import { cards, emptyState, metas, page, section, table } from '../shell';
 import { ago, delta, esc, num, plural, quantity, quantityAxis, when } from '../format';
 import { compareKeys, itemLabel, looksLikeEquipment, slotName } from '../gear';
 import type { Ctx } from '../context';
-import { listAddons } from '../../addons';
-import { diffMembers, parseMembers, parsePath, type Member } from '../../tracking';
+import { listAddons, readAddon, type AddonFile } from '../../addons';
+import { isTable } from '../../../../core/src/savedvars/lua';
+import { collectValues, entityOptions, pinEntity } from '../../../../core/src/savedvars/shape';
+import { diffMembers, parseMembers, parsePath, toNumber, type Member } from '../../tracking';
 import { itemIdFromString } from '../../items';
 import type { TrackedMetricRow, TrackedSampleRow } from '../../store';
 import { encodePath } from './addon';
@@ -64,7 +66,14 @@ export function renderTracked(ctx: Ctx): string {
       ? `<a href="/addon?f=${file.id}&path=${encodePath(segments)}">${esc(m.label)}</a>`
       : `<span class="pill bad">${esc(m.addon_file)} not installed</span>`;
 
-    const header = `<h2 style="margin-top:34px">${esc(m.label)}
+    // A pinned series says whose it is; an unpinned one says it is a sum, because the sum of two
+    // characters' money is a number neither of them can spend.
+    const who = m.entity
+      ? `<span class="pill sel">${esc(m.entity)}</span>`
+      : segments.includes('*')
+        ? '<span class="pill">all entities</span>'
+        : '';
+    const header = `<h2 style="margin-top:34px">${esc(m.label)} ${who}
         <span class="hint">${
           m.kind === 'set' ? 'set · members per flush' : m.unit === 'copper' ? 'copper · shown as gold' : m.unit
         }</span>
@@ -83,7 +92,7 @@ export function renderTracked(ctx: Ctx): string {
       m.kind === 'set' || !latest || latest.instances <= 1 ? null : `sum of ${num(latest.instances)} values`,
     ]);
 
-    return `<section>${header}${meta}${
+    return `<section>${header}${meta}${instanceChoices(m, file, segments)}${
       m.kind === 'set' ? setBody(m, samples, names, details) : numberBody(m, samples)
     }</section>`;
   });
@@ -106,6 +115,52 @@ export function renderTracked(ctx: Ctx): string {
      </div>`,
     { active: 'tracked', refresh: 60, ctx },
   );
+}
+
+/**
+ * For an unpinned sum, what each entity contributed at the last flush, with a one-click way to
+ * track one of them on its own.
+ *
+ * This is the answer to "gold says 17g but my character has 74s": the number is two wallets, and
+ * here they are, named. Tracking one creates a separate series — the existing sum keeps its
+ * history, because a series that changes meaning mid-chart is worse than no chart.
+ */
+function instanceChoices(m: TrackedMetricRow, file: AddonFile | undefined, segments: string[]): string {
+  if (m.entity || m.kind === 'set' || !file || !segments.includes('*')) return '';
+  const read = readAddon(file);
+  const global = read.globals.find((g) => g.name === m.global_name);
+  if (!global || !isTable(global.value)) return '';
+  const rel = segments[0] === m.global_name ? segments.slice(1) : segments;
+  // Only entities this path really resolves to a number: a guild roster folded in beside the
+  // characters has nothing at `…["Origins*"].money`, and listing it would be a dead link.
+  const keys = entityOptions(global.value, rel).filter(
+    (key) => collectValues(global.value, pinEntity(rel, key)).length > 0,
+  );
+  if (keys.length === 0) return '';
+  const items = keys
+    .map((key) => {
+      const value = collectValues(global.value, pinEntity(rel, key))
+        .map(toNumber)
+        .find((v): v is number => v !== null);
+      if (value === undefined) return '';
+      const shown = quantity(value, m.unit);
+      return `<li><span>${esc(key)}</span><b>${shown}</b>
+        <form method="post" action="/track" style="display:inline">
+          <input type="hidden" name="f" value="${esc(file.id)}">
+          <input type="hidden" name="path" value="${esc(encodePath(segments))}">
+          <input type="hidden" name="label" value="${esc(`${m.label} · ${key}`)}">
+          <input type="hidden" name="unit" value="${esc(m.unit)}">
+          <input type="hidden" name="kind" value="${esc(m.kind)}">
+          <input type="hidden" name="entity" value="${esc(key)}">
+          <button type="submit" class="linkbtn" title="track this one on its own">track</button>
+        </form></li>`;
+    })
+    .join('');
+  return `<div class="sub" style="margin:10px 0 0">
+      <b>this sum is ${keys.length} entities.</b> At the last flush, each was worth:
+      <ul class="kv">${items}</ul>
+      Each becomes its own series; this one keeps its history as the total.
+    </div>`;
 }
 
 function numberBody(m: TrackedMetricRow, samples: TrackedSampleRow[]): string {

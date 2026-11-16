@@ -27,6 +27,13 @@ export const PROVIDERS: Record<string, ProviderNote> = {
   'DBM-Core.lua': { id: 'sv.dbm', caps: [] },
   'Plater.lua': { id: 'sv.plater', caps: [] },
   'HealBot.lua': { id: 'sv.healbot', caps: [] },
+  // Our own addon. It exists for the capabilities no other file can supply: the combat log has no
+  // talent event, no gear, no professions and no lockouts, and third-party rosters only know their
+  // own members. See docs/SENSOR.md.
+  'PortalstoneSense.lua': {
+    id: 'addon.ours',
+    caps: ['character.spec', 'character.gear', 'character.played', 'profession.skills', 'instance.lockouts', 'roster.group'],
+  },
 };
 
 export function providerFor(fileName: string): ProviderNote | undefined {

@@ -15,7 +15,10 @@ import type { BagDrop } from '../../core/src/bags';
  * Bumped when the derived data gains a dimension that an older database cannot have. A mismatch
  * triggers one full re-read of every log, which is cheap next to telling the user to run --rebuild.
  */
-const DETAIL_SCHEMA = '4';
+// 5: sessions carry their own character (a log file can span two toons). Older databases stamped
+// every session in a file with one name, which cannot be repaired from what they stored — so the
+// bump buys one full re-read.
+const DETAIL_SCHEMA = '6';
 
 
 const SCHEMA = `
@@ -154,11 +157,17 @@ CREATE TABLE IF NOT EXISTS tracked_metric (
   unit TEXT NOT NULL DEFAULT 'plain',
   -- 'number': summed scalar, charted. 'set': the members of a table (equipment slots), diffed.
   kind TEXT NOT NULL DEFAULT 'number',
+  -- the concrete key behind the first wildcard; null means "every instance, summed". Two metrics
+  -- may share a path and differ only here: one character's level beside another's.
+  entity TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_ms INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_metric_unique ON tracked_metric (addon_file, path);
+-- The series identity is (file, path, entity): the same property about two characters is two
+-- series, and re-tracking either one must land on its own row instead of hijacking the other's.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_metric_unique
+  ON tracked_metric (addon_file, path, COALESCE(entity, ''));
 
 CREATE TABLE IF NOT EXISTS tracked_sample (
   metric_id INTEGER NOT NULL REFERENCES tracked_metric(id) ON DELETE CASCADE,
@@ -177,6 +186,57 @@ CREATE TABLE IF NOT EXISTS tracked_sample (
 -- mtime is the natural key and re-scanning the same file cannot duplicate a point.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_sample_flush ON tracked_sample (metric_id, source_mtime_ms);
 CREATE INDEX IF NOT EXISTS idx_tracked_sample_ts ON tracked_sample (metric_id, ts_ms DESC);
+
+-- Player-versus-player, one row per event: this is a log of encounters, not a counter, because the
+-- question is "who keeps killing me" and that needs names with times.
+CREATE TABLE IF NOT EXISTS pvp_event (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  ts_ms INTEGER NOT NULL,
+  /** 'kill' = you killed them, 'death' = they killed you */
+  direction TEXT NOT NULL,
+  opponent_name TEXT NOT NULL,
+  opponent_guid TEXT,
+  /** the ability that landed the last hit, '' when the log does not say */
+  spell TEXT,
+  zone_name TEXT,
+  zone_kind TEXT,
+  character_name TEXT,
+  character_guid TEXT,
+  UNIQUE (session_id, ts_ms, direction, opponent_name)
+);
+CREATE INDEX IF NOT EXISTS idx_pvp_opponent ON pvp_event (opponent_name, direction, ts_ms);
+CREATE INDEX IF NOT EXISTS idx_pvp_ts ON pvp_event (ts_ms);
+
+-- A dashboard is a named collection of cards; a card names the metric it reads and the view it
+-- uses. Nothing here is derived from the logs, so a schema bump never has to re-read them.
+CREATE TABLE IF NOT EXISTS dashboard (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  created_ms INTEGER NOT NULL,
+  updated_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_card (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dashboard_id INTEGER NOT NULL REFERENCES dashboard(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT '',
+  metric TEXT NOT NULL,
+  view TEXT NOT NULL DEFAULT 'bar',
+  -- legacy: 1 = half of the old two-column grid, 2 = the whole row
+  span INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  -- gridstack geometry on a 12-column grid; -1 means "let the grid place it"
+  x INTEGER NOT NULL DEFAULT -1,
+  y INTEGER NOT NULL DEFAULT -1,
+  w INTEGER NOT NULL DEFAULT 6,
+  h INTEGER NOT NULL DEFAULT 3,
+  -- 0 = all time; otherwise the window in minutes (15, 60, 1440, ...)
+  range_minutes INTEGER NOT NULL DEFAULT 0,
+  created_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_card_dashboard ON dashboard_card (dashboard_id, position);
 
 -- Item names, once known, never fetched again. Ids are always the fallback, so a slow or partial
 -- name source degrades the display and nothing else.
@@ -260,6 +320,9 @@ export interface SegmentRow {
   field_deaths: number;
   players_died: number;
   casts: number;
+  /** whose run this is: the run page compares only this character's own runs */
+  character_guid: string | null;
+  character_name: string | null;
 }
 
 export interface SessionRow {
@@ -288,6 +351,21 @@ export interface SessionRow {
   zones_count: number;
 }
 
+/** One character, with what every session of theirs added up to. */
+export interface CharacterRow {
+  name: string;
+  guid: string | null;
+  sessions: number;
+  first_ms: number;
+  last_ms: number;
+  duration_s: number;
+  engaged_s: number;
+  damage: number;
+  healing: number;
+  kills: number;
+  deaths: number;
+}
+
 /** A property the user chose to track, and what it meant to them. */
 export interface TrackedMetricRow {
   id: number;
@@ -299,8 +377,48 @@ export interface TrackedMetricRow {
   unit: string;
   /** 'number' (summed scalar) or 'set' (members of a table, e.g. equipped gear) */
   kind: string;
+  /** the key behind the first wildcard (`Slouch Mage`), or null for "all of them, summed" */
+  entity: string | null;
   enabled: number;
   created_ms: number;
+}
+
+/** One PvP event as stored: the opponent, when, where, and with what. */
+export interface PvpEventRow {
+  id: number;
+  session_id: number;
+  ts_ms: number;
+  direction: 'kill' | 'death';
+  opponent_name: string;
+  opponent_guid: string | null;
+  spell: string | null;
+  zone_name: string | null;
+  zone_kind: string | null;
+  character_name: string | null;
+}
+
+/** One opponent, added up: how often, over what span, and where. */
+export interface PvpOpponentRow {
+  opponent_name: string;
+  times: number;
+  first_ms: number;
+  last_ms: number;
+  zones: number;
+  /** the ability that landed it most often — the last one tells you what hurt */
+  spell: string | null;
+}
+
+export interface PvpSummary {
+  kills: number;
+  deaths: number;
+  /** distinct people you killed */
+  opponents: number;
+  /** distinct people who killed you */
+  killers: number;
+  /** people who killed you more than once: the list that makes this page worth opening */
+  repeatKillers: number;
+  firstMs: number | null;
+  lastMs: number | null;
 }
 
 export interface TrackedSampleRow {
@@ -314,6 +432,48 @@ export interface TrackedSampleRow {
   members: string | null;
   source_file: string | null;
   source_mtime_ms: number;
+}
+
+export interface DashboardRow {
+  id: number;
+  name: string;
+  created_ms: number;
+  updated_ms: number;
+}
+
+export interface DashboardSummary extends DashboardRow {
+  cards: number;
+}
+
+export interface DashboardCardRow {
+  id: number;
+  dashboard_id: number;
+  title: string;
+  metric: string;
+  view: string;
+  span: number;
+  position: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  range_minutes: number;
+  created_ms: number;
+}
+
+/** Zone visits added up per zone: the comparison basis for "where did my time go". */
+export interface ZoneAggregateRow {
+  zone_name: string;
+  kind: string;
+  runs: number;
+  duration_s: number;
+  engaged_s: number;
+  damage_done: number;
+  healing_done: number;
+  damage_taken: number;
+  kills: number;
+  my_deaths: number;
+  casts: number;
 }
 
 export interface Totals {
@@ -345,9 +505,44 @@ export class Store {
     if (!metricCols.some((c) => c.name === 'kind')) {
       this.db.exec("ALTER TABLE tracked_metric ADD COLUMN kind TEXT NOT NULL DEFAULT 'number'");
     }
+    // Per-character tracked values: an older database has no entity column, and its unique index
+    // would refuse a second metric on the same path. Add the column and widen the index, once.
+    if (!metricCols.some((c) => c.name === 'entity')) {
+      this.db.exec('ALTER TABLE tracked_metric ADD COLUMN entity TEXT');
+      this.db.exec('DROP INDEX IF EXISTS idx_tracked_metric_unique');
+      this.db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_metric_unique ON tracked_metric (addon_file, path, COALESCE(entity, ''))",
+      );
+    }
     const sampleCols = this.db.prepare('PRAGMA table_info(tracked_sample)').all() as { name: string }[];
     if (!sampleCols.some((c) => c.name === 'members')) {
       this.db.exec('ALTER TABLE tracked_sample ADD COLUMN members TEXT');
+    }
+    // Dashboard cards grew a grid geometry and a time window. Backfill both once: cards created
+    // before the grid existed pair up two to a row, wide cards take the whole row.
+    const cardCols = this.db.prepare('PRAGMA table_info(dashboard_card)').all() as { name: string }[];
+    if (!cardCols.some((c) => c.name === 'x')) {
+      this.db.exec('ALTER TABLE dashboard_card ADD COLUMN x INTEGER NOT NULL DEFAULT -1');
+      this.db.exec('ALTER TABLE dashboard_card ADD COLUMN y INTEGER NOT NULL DEFAULT -1');
+      this.db.exec('ALTER TABLE dashboard_card ADD COLUMN w INTEGER NOT NULL DEFAULT 6');
+      this.db.exec('ALTER TABLE dashboard_card ADD COLUMN h INTEGER NOT NULL DEFAULT 3');
+      const legacy = this.db
+        .prepare('SELECT id, dashboard_id, span FROM dashboard_card ORDER BY dashboard_id, position, id')
+        .all() as { id: number; dashboard_id: number; span: number }[];
+      const cursor = new Map<number, { x: number; y: number }>();
+      const update = this.db.prepare('UPDATE dashboard_card SET x=?, y=?, w=?, h=? WHERE id=?');
+      for (const row of legacy) {
+        const w = row.span === 2 ? 12 : 6;
+        const h = 3;
+        let at = cursor.get(row.dashboard_id) ?? { x: 0, y: 0 };
+        if (at.x + w > 12) at = { x: 0, y: at.y + h };
+        update.run(at.x, at.y, w, h, row.id);
+        at = at.x + w >= 12 ? { x: 0, y: at.y + h } : { x: at.x + w, y: at.y };
+        cursor.set(row.dashboard_id, at);
+      }
+    }
+    if (!cardCols.some((c) => c.name === 'range_minutes')) {
+      this.db.exec('ALTER TABLE dashboard_card ADD COLUMN range_minutes INTEGER NOT NULL DEFAULT 0');
     }
     const cols = this.db.prepare('PRAGMA table_info(session)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'zones')) this.db.exec('ALTER TABLE session ADD COLUMN zones TEXT');
@@ -361,6 +556,32 @@ export class Store {
     if (!cols.some((c) => c.name === 'players_died')) {
       this.db.exec('ALTER TABLE session ADD COLUMN players_died INTEGER NOT NULL DEFAULT 0');
     }
+    // A run belongs to a character just as much as a session does. These columns were in the
+    // zone_segment CREATE TABLE but were never added to databases built before them, and the insert
+    // never wrote them — so every run predating this migration knows only its session. Backfill
+    // from the session, then index: without this, "my other runs in this zone" is empty for anyone
+    // who has been using the app, and filtering runs by character hides their whole history.
+    if (!segCols.some((c) => c.name === 'character_name')) {
+      if (!cols.some((c) => c.name === 'character_name')) {
+        this.db.exec('ALTER TABLE session ADD COLUMN character_guid TEXT');
+        this.db.exec('ALTER TABLE session ADD COLUMN character_name TEXT');
+      }
+      this.db.exec('ALTER TABLE zone_segment ADD COLUMN character_guid TEXT');
+      this.db.exec('ALTER TABLE zone_segment ADD COLUMN character_name TEXT');
+    }
+    this.db.exec(
+      `UPDATE zone_segment SET
+         character_name = (SELECT s.character_name FROM session s WHERE s.id = zone_segment.session_id),
+         character_guid = (SELECT s.character_guid FROM session s WHERE s.id = zone_segment.session_id)
+       WHERE character_name IS NULL
+         AND EXISTS (SELECT 1 FROM session s WHERE s.id = zone_segment.session_id AND s.character_name IS NOT NULL)`,
+    );
+    // Sessions are read per character far more often than across all of them, and one player's log
+    // directory grows to thousands of rows: without these the filter is a full scan on every page.
+    // Created here rather than in SCHEMA, because they name columns old databases only just gained.
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_session_character ON session (character_name, start_ms)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_segment_character ON zone_segment (character_name, start_ms)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_segment_zone ON zone_segment (zone_name, character_name, start_ms)');
     // The camp model (bags plus inferred attendance) is gone: distances were guesses dressed as
     // data. Bag drops are hard events, and nothing in these tables was source data.
     this.db.exec('DROP TABLE IF EXISTS camp_attendee');
@@ -388,6 +609,23 @@ export class Store {
       .get(logPath) as { zone_id: number | null; zone_name: string | null } | undefined;
     if (!row) return null;
     return { id: row.zone_id, name: row.zone_name ?? '' };
+  }
+
+  /**
+   * The character the last session of this log belonged to.
+   *
+   * A resumed read starts in the middle of the session still being written, so the events that
+   * identified the player are behind the read offset. Seeding from the stored session keeps the
+   * re-read session attributed to the same character instead of blanking it.
+   */
+  lastSessionCharacter(logPath: string): { guid: string | null; name: string | null } | null {
+    const row = this.db
+      .prepare(
+        'SELECT character_guid, character_name FROM session WHERE log_path = ? ORDER BY start_ms DESC LIMIT 1',
+      )
+      .get(logPath) as { character_guid: string | null; character_name: string | null } | undefined;
+    if (!row) return null;
+    return { guid: row.character_guid, name: row.character_name };
   }
 
   meta(key: string): string | null {
@@ -457,7 +695,20 @@ export class Store {
   }
 
   /** Replace every session at or after `fromMs` for this log, atomically. */
-  replaceSessionsFrom(logPath: string, fromMs: number, sessions: SessionSnapshot[], character: { guid: string | null; name: string | null }): number[] {
+  /**
+   * Rewrite every session from `fromMs` on.
+   *
+   * Each session carries its own character (`selfGuid`/`selfName`), because one log file is one
+   * *client launch*: logging out to another toon without restarting keeps writing to the same file,
+   * and stamping the whole pass with one name is how a paladin's evening got labelled as the mage's.
+   */
+  replaceSessionsFrom(
+    logPath: string,
+    fromMs: number,
+    sessions: SessionSnapshot[],
+    /** used only when a session carries no identity of its own (hand-built snapshots, old data) */
+    fallback?: { guid: string | null; name: string | null },
+  ): number[] {
     const ids: number[] = [];
     this.db.exec('BEGIN');
     try {
@@ -477,6 +728,10 @@ export class Store {
         // The interesting zone is the one where the fighting happened, not the one the player
         // logged out in: a battleground session should say "Warsong Gulch", not "Tirisfal Glades".
         const primary = primaryZone(s);
+        const character = {
+          guid: s.selfGuid ?? fallback?.guid ?? null,
+          name: s.selfName ?? fallback?.name ?? null,
+        };
         const info = this.db
           .prepare(
             `INSERT INTO session (log_path, start_ms, end_ms, offset_min, zone_id, zone_name, zones,
@@ -518,8 +773,8 @@ export class Store {
         const insertSegment = this.db.prepare(
           `INSERT INTO zone_segment (session_id, zone_id, zone_name, kind, start_ms, end_ms,
              duration_s, engaged_s, damage_done, damage_taken, healing_done, kills, field_kills,
-             my_deaths, field_deaths, players_died, casts)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             my_deaths, field_deaths, players_died, casts, character_guid, character_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         );
         const insertSegmentAbility = this.db.prepare(
           'INSERT INTO segment_ability (segment_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
@@ -543,6 +798,10 @@ export class Store {
             z.deaths,
             z.playersDied,
             z.casts,
+            // Stamped on the run, not just the session: the run page compares this character's
+            // own runs, and a run has to be able to answer "whose" without a join.
+            character.guid,
+            character.name,
           );
           // Per-run detail is what the run page drills into: the same ability breakdown the
           // session gets, kept against the zone visit it happened in.
@@ -567,6 +826,25 @@ export class Store {
         }
         for (const c of s.open.topCasts) {
           insertAbility.run(id, 'cast', c.id, c.name, c.casts, 0);
+        }
+        // PvP is kept per event, and the zone comes from the segment the event falls in: the
+        // session bag does not know it, but the zone is what a player remembers.
+        const insertPvp = this.db.prepare(
+          `INSERT OR IGNORE INTO pvp_event (session_id, ts_ms, direction, opponent_name, opponent_guid,
+             spell, zone_name, zone_kind, character_name, character_guid)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        );
+        const zoneAt = (ms: number): { name: string; kind: string } => {
+          const hit = s.zones.find((z) => ms >= z.startMs && ms <= z.endMs);
+          return hit ? { name: hit.name, kind: hit.kind } : { name: primary, kind: 'zone' };
+        };
+        for (const k of s.open.pvpKills) {
+          const z = zoneAt(k.ms);
+          insertPvp.run(id, k.ms, 'kill', k.name, k.guid, k.spell, z.name, z.kind, character.name, character.guid);
+        }
+        for (const d of s.open.pvpDeaths) {
+          const z = zoneAt(d.ms);
+          insertPvp.run(id, d.ms, 'death', d.name, d.guid, d.spell, z.name, z.kind, character.name, character.guid);
         }
         for (const e of s.encounters) {
           this.db
@@ -607,15 +885,115 @@ export class Store {
     return ids;
   }
 
-  listSessions(limit = 60): SessionRow[] {
+  listSessions(limit = 60, character: string | null = null): SessionRow[] {
+    const where = character ? 'WHERE s.character_name = ?' : '';
+    const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(
         `SELECT s.*,
            (SELECT COUNT(*) FROM encounter e WHERE e.session_id = s.id) AS encounters,
            (SELECT COUNT(*) FROM zone_segment z WHERE z.session_id = s.id) AS zones_count
-         FROM session s ORDER BY s.start_ms DESC LIMIT ?`,
+         FROM session s ${where} ORDER BY s.start_ms DESC LIMIT ?`,
       )
-      .all(limit) as unknown as SessionRow[];
+      .all(...args) as unknown as SessionRow[];
+  }
+
+  /**
+   * Every character that has a session, newest play first.
+   *
+   * A player's alt and their main are different people as far as every rate on these pages is
+   * concerned: a level-15 mage's damage and a level-36 paladin's are not the same measurement, so
+   * anything that adds sessions up has to name which character it added. This is the roster that
+   * choice is made from.
+   */
+  characters(): CharacterRow[] {
+    return this.db
+      .prepare(
+        `SELECT COALESCE(NULLIF(character_name, ''), 'unknown') AS name,
+                MAX(character_guid) AS guid,
+                COUNT(*) AS sessions,
+                MIN(start_ms) AS first_ms,
+                MAX(COALESCE(end_ms, start_ms)) AS last_ms,
+                COALESCE(SUM(duration_s), 0) AS duration_s,
+                COALESCE(SUM(engaged_s), 0) AS engaged_s,
+                COALESCE(SUM(damage_done), 0) AS damage,
+                COALESCE(SUM(healing_done), 0) AS healing,
+                COALESCE(SUM(kills), 0) AS kills,
+                COALESCE(SUM(my_deaths), 0) AS deaths
+           FROM session
+         GROUP BY name
+         ORDER BY last_ms DESC`,
+      )
+      .all() as unknown as CharacterRow[];
+  }
+
+  /** Headline PvP numbers, optionally for one character. */
+  pvpSummary(character: string | null = null): PvpSummary {
+    const where = character ? 'WHERE character_name = ?' : '';
+    const args = character ? [character] : [];
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(direction = 'kill'), 0) AS kills,
+                COALESCE(SUM(direction = 'death'), 0) AS deaths,
+                COUNT(DISTINCT CASE WHEN direction = 'kill' THEN opponent_name END) AS opponents,
+                COUNT(DISTINCT CASE WHEN direction = 'death' THEN opponent_name END) AS killers,
+                MIN(ts_ms) AS firstMs,
+                MAX(ts_ms) AS lastMs
+           FROM pvp_event ${where}`,
+      )
+      .get(...args) as unknown as Omit<PvpSummary, 'repeatKillers'>;
+    const repeat = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT opponent_name FROM pvp_event
+            ${where ? `${where} AND` : 'WHERE'} direction = 'death'
+            GROUP BY opponent_name HAVING COUNT(*) > 1)`,
+      )
+      .get(...args) as unknown as { n: number };
+    return { ...row, repeatKillers: repeat.n };
+  }
+
+  /**
+   * Opponents on one side of the exchange, most frequent first.
+   *
+   * Grouped by name, not guid: the same person can appear under one guid per session in some logs,
+   * and the question "is this the same player" is answered by the name a player recognises.
+   */
+  pvpOpponents(direction: 'kill' | 'death', character: string | null = null, limit = 100): PvpOpponentRow[] {
+    const clauses = ['direction = ?'];
+    const args: (string | number)[] = [direction];
+    if (character) {
+      clauses.push('character_name = ?');
+      args.push(character);
+    }
+    args.push(limit);
+    return this.db
+      .prepare(
+        `SELECT opponent_name,
+                COUNT(*) AS times,
+                MIN(ts_ms) AS first_ms,
+                MAX(ts_ms) AS last_ms,
+                COUNT(DISTINCT COALESCE(NULLIF(zone_name, ''), 'unknown')) AS zones,
+                (SELECT spell FROM pvp_event p2
+                  WHERE p2.opponent_name = pvp_event.opponent_name AND p2.direction = pvp_event.direction
+                    AND p2.spell IS NOT NULL AND p2.spell <> ''
+                  ORDER BY p2.ts_ms DESC LIMIT 1) AS spell
+           FROM pvp_event
+          WHERE ${clauses.join(' AND ')}
+          GROUP BY opponent_name
+          ORDER BY times DESC, last_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args) as unknown as PvpOpponentRow[];
+  }
+
+  /** The events themselves, newest first: the timeline behind the tables. */
+  pvpEvents(character: string | null = null, limit = 200): PvpEventRow[] {
+    const where = character ? 'WHERE character_name = ?' : '';
+    const args = character ? [character, limit] : [limit];
+    return this.db
+      .prepare(`SELECT * FROM pvp_event ${where} ORDER BY ts_ms DESC LIMIT ?`)
+      .all(...args) as unknown as PvpEventRow[];
   }
 
   session(id: number): SessionRow | undefined {
@@ -672,13 +1050,31 @@ export class Store {
   }
 
   /**
+   * Every ability recorded for one run, with the kind it was recorded under.
+   *
+   * The spec classifier needs the whole list, not the top twelve: the single talent-locked ability
+   * in a run can sit below twenty generic ones, and a top-twelve table would never show it.
+   */
+  segmentAbilitiesAll(segmentId: number): (AbilityRow & { kind: string })[] {
+    return this.db
+      .prepare(
+        'SELECT kind, spell_id, name, amount, hits FROM segment_ability WHERE segment_id = ? ORDER BY amount DESC',
+      )
+      .all(segmentId) as unknown as (AbilityRow & { kind: string })[];
+  }
+
+  /**
    * Every run in a zone, newest first. This is the comparison basis for "how did this run compare
    * to my other runs here" — the same character, the same content, so the rates are comparable.
+   * Naming the character is not optional in practice: an alt leveling in the same zone as your main
+   * would otherwise become the "median" you are measured against.
    */
-  runsForZone(zoneName: string, limit = 200): SegmentRow[] {
+  runsForZone(zoneName: string, limit = 200, character: string | null = null): SegmentRow[] {
+    const where = character ? 'zone_name = ? AND character_name = ?' : 'zone_name = ?';
+    const args = character ? [zoneName, character, limit] : [zoneName, limit];
     return this.db
-      .prepare('SELECT * FROM zone_segment WHERE zone_name = ? ORDER BY start_ms DESC LIMIT ?')
-      .all(zoneName, limit) as unknown as SegmentRow[];
+      .prepare(`SELECT * FROM zone_segment WHERE ${where} ORDER BY start_ms DESC LIMIT ?`)
+      .all(...args) as unknown as SegmentRow[];
   }
 
   /** True while the database predates per-run ability detail and needs one full re-read. */
@@ -716,25 +1112,28 @@ export class Store {
       .all(limit) as unknown as BagDropRow[];
   }
 
-  /** Who drops bags, how often, and where. */
-  bagDropStats(): BagDropStats {
-    const one = (sql: string, ...args: (string | number)[]): number =>
-      (this.db.prepare(sql).get(...args) as { c: number }).c;
+  /** Who drops bags, how often, and where. `sinceMs` limits it to a card's time window. */
+  bagDropStats(sinceMs: number | null = null): BagDropStats {
+    const since = sinceMs && sinceMs > 0 ? sinceMs : 0;
+    const where = since > 0 ? 'WHERE ts_ms >= ?' : '';
+    const args = since > 0 ? [since] : [];
+    const one = (sql: string, ...extra: (string | number)[]): number =>
+      (this.db.prepare(sql).get(...extra) as { c: number }).c;
     return {
-      total: one('SELECT COUNT(*) c FROM bag_drop'),
-      mine: one('SELECT COUNT(*) c FROM bag_drop WHERE mine = 1'),
+      total: one(`SELECT COUNT(*) c FROM bag_drop ${where}`, ...args),
+      mine: one(`SELECT COUNT(*) c FROM bag_drop ${where}${where ? ' AND' : 'WHERE'} mine = 1`, ...args),
       droppers: this.db
         .prepare(
           `SELECT COALESCE(name, 'unknown') name, COUNT(*) count, MAX(mine) mine
-             FROM bag_drop GROUP BY guid, name ORDER BY count DESC, name LIMIT 15`,
+             FROM bag_drop ${where} GROUP BY guid, name ORDER BY count DESC, name LIMIT 15`,
         )
-        .all() as unknown as { name: string; count: number; mine: number }[],
+        .all(...args) as unknown as { name: string; count: number; mine: number }[],
       zones: this.db
         .prepare(
           `SELECT COALESCE(NULLIF(zone_name, ''), 'unknown') zone_name, COUNT(*) count
-             FROM bag_drop GROUP BY zone_name ORDER BY count DESC, zone_name LIMIT 15`,
+             FROM bag_drop ${where} GROUP BY zone_name ORDER BY count DESC, zone_name LIMIT 15`,
         )
-        .all() as unknown as { zone_name: string; count: number }[],
+        .all(...args) as unknown as { zone_name: string; count: number }[],
     };
   }
 
@@ -752,10 +1151,12 @@ export class Store {
   }
 
   /** Recent runs across all sessions, newest first. Instances first in the UI's eyes. */
-  recentRuns(limit = 60): SegmentRow[] {
+  recentRuns(limit = 60, character: string | null = null): SegmentRow[] {
+    const where = character ? 'WHERE character_name = ?' : '';
+    const args = character ? [character, limit] : [limit];
     return this.db
-      .prepare('SELECT * FROM zone_segment ORDER BY start_ms DESC LIMIT ?')
-      .all(limit) as unknown as SegmentRow[];
+      .prepare(`SELECT * FROM zone_segment ${where} ORDER BY start_ms DESC LIMIT ?`)
+      .all(...args) as unknown as SegmentRow[];
   }
 
   /**
@@ -783,12 +1184,15 @@ export class Store {
     label: string;
     unit: string;
     kind?: 'number' | 'set';
+    /** pin the first wildcard to one key (a character); omit to keep summing every instance */
+    entity?: string | null;
   }): number {
     const pathJson = JSON.stringify(m.path);
     const kind = m.kind === 'set' ? 'set' : 'number';
+    const entity = m.entity && m.entity.length > 0 ? m.entity : null;
     const existing = this.db
-      .prepare('SELECT id FROM tracked_metric WHERE addon_file = ? AND path = ?')
-      .get(m.addonFile, pathJson) as { id: number } | undefined;
+      .prepare('SELECT id FROM tracked_metric WHERE addon_file = ? AND path = ? AND entity IS ?')
+      .get(m.addonFile, pathJson, entity) as { id: number } | undefined;
     if (existing) {
       this.db
         .prepare('UPDATE tracked_metric SET enabled = 1, label = ?, unit = ?, kind = ? WHERE id = ?')
@@ -797,10 +1201,10 @@ export class Store {
     }
     const info = this.db
       .prepare(
-        `INSERT INTO tracked_metric (addon_file, global_name, path, label, unit, kind, enabled, created_ms)
-         VALUES (?,?,?,?,?,?,1,?)`,
+        `INSERT INTO tracked_metric (addon_file, global_name, path, label, unit, kind, entity, enabled, created_ms)
+         VALUES (?,?,?,?,?,?,?,1,?)`,
       )
-      .run(m.addonFile, m.globalName, pathJson, m.label, m.unit, kind, Date.now());
+      .run(m.addonFile, m.globalName, pathJson, m.label, m.unit, kind, entity, Date.now());
     return Number(info.lastInsertRowid);
   }
 
@@ -860,6 +1264,200 @@ export class Store {
     return this.db
       .prepare('SELECT * FROM tracked_sample WHERE metric_id = ? ORDER BY ts_ms DESC LIMIT 1')
       .get(metricId) as unknown as TrackedSampleRow | undefined;
+  }
+
+  /* ---------------------------------------------------------------------------------------------
+   * Dashboards. A dashboard is a name and an order; a card is a metric plus the view that reads it.
+   * Cards are read in the order they were added, so the layout stays put between visits.
+   * ------------------------------------------------------------------------------------------- */
+
+  dashboards(): DashboardSummary[] {
+    return this.db
+      .prepare(
+        `SELECT d.*, (SELECT COUNT(*) FROM dashboard_card c WHERE c.dashboard_id = d.id) AS cards
+           FROM dashboard d ORDER BY d.created_ms, d.id`,
+      )
+      .all() as unknown as DashboardSummary[];
+  }
+
+  dashboard(id: number): DashboardRow | undefined {
+    return this.db.prepare('SELECT * FROM dashboard WHERE id = ?').get(id) as unknown as DashboardRow | undefined;
+  }
+
+  createDashboard(name: string): number {
+    const now = Date.now();
+    const info = this.db
+      .prepare('INSERT INTO dashboard (name, created_ms, updated_ms) VALUES (?,?,?)')
+      .run(name, now, now);
+    return Number(info.lastInsertRowid);
+  }
+
+  renameDashboard(id: number, name: string): void {
+    this.db
+      .prepare('UPDATE dashboard SET name = ?, updated_ms = ? WHERE id = ?')
+      .run(name, Date.now(), id);
+  }
+
+  /** Remove a dashboard and every card on it, in one transaction. */
+  deleteDashboard(id: number): void {
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM dashboard_card WHERE dashboard_id = ?').run(id);
+      this.db.prepare('DELETE FROM dashboard WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  dashboardCards(dashboardId: number): DashboardCardRow[] {
+    return this.db
+      .prepare('SELECT * FROM dashboard_card WHERE dashboard_id = ? ORDER BY position, id')
+      .all(dashboardId) as unknown as DashboardCardRow[];
+  }
+
+  dashboardCard(id: number): DashboardCardRow | undefined {
+    return this.db.prepare('SELECT * FROM dashboard_card WHERE id = ?').get(id) as unknown as DashboardCardRow | undefined;
+  }
+
+  /** Append a card to the end of a dashboard. The dashboard's updated stamp moves with it. */
+  addDashboardCard(c: {
+    dashboardId: number;
+    metric: string;
+    title: string;
+    view: string;
+    span?: number;
+    w?: number;
+    h?: number;
+    x?: number;
+    y?: number;
+    rangeMinutes?: number;
+  }): number {
+    const now = Date.now();
+    const next = this.db
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM dashboard_card WHERE dashboard_id = ?')
+      .get(c.dashboardId) as { next: number };
+    const span = c.span === 2 || (c.w ?? 0) >= 9 ? 2 : 1;
+    const info = this.db
+      .prepare(
+        `INSERT INTO dashboard_card
+           (dashboard_id, title, metric, view, span, position, x, y, w, h, range_minutes, created_ms)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        c.dashboardId,
+        c.title,
+        c.metric,
+        c.view,
+        span,
+        next.next,
+        clampInt(c.x ?? -1, -1, 11),
+        clampInt(c.y ?? -1, -1, 1000),
+        clampInt(c.w ?? (span === 2 ? 12 : 6), 1, 12),
+        clampInt(c.h ?? 3, 1, 40),
+        Math.max(0, Math.round(c.rangeMinutes ?? 0)),
+        now,
+      );
+    this.db.prepare('UPDATE dashboard SET updated_ms = ? WHERE id = ?').run(now, c.dashboardId);
+    return Number(info.lastInsertRowid);
+  }
+
+  /** Rewrite the non-geometry half of a card. Geometry belongs to the drag/resize layout. */
+  updateDashboardCard(
+    id: number,
+    c: { title: string; metric: string; view: string; rangeMinutes: number },
+  ): number {
+    const card = this.dashboardCard(id);
+    if (!card) return 0;
+    const now = Date.now();
+    this.db
+      .prepare('UPDATE dashboard_card SET title = ?, metric = ?, view = ?, range_minutes = ? WHERE id = ?')
+      .run(c.title || c.metric, c.metric, c.view, Math.max(0, Math.round(c.rangeMinutes)), id);
+    this.db.prepare('UPDATE dashboard SET updated_ms = ? WHERE id = ?').run(now, card.dashboard_id);
+    return card.dashboard_id;
+  }
+
+  /**
+   * Save the grid after a drag or resize. Only cards that belong to this dashboard are touched; a
+   * hand-crafted payload cannot move another dashboard's card.
+   */
+  saveDashboardLayout(
+    dashboardId: number,
+    items: { id: number; x: number; y: number; w: number; h: number }[],
+  ): number {
+    const owned = new Set(this.dashboardCards(dashboardId).map((c) => c.id));
+    const update = this.db.prepare(
+      'UPDATE dashboard_card SET x = ?, y = ?, w = ?, h = ? WHERE id = ? AND dashboard_id = ?',
+    );
+    let saved = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const item of items) {
+        if (!owned.has(item.id)) continue;
+        saved += Number(
+          update.run(
+            clampInt(item.x, 0, 11),
+            clampInt(item.y, 0, 1000),
+            clampInt(item.w, 1, 12),
+            clampInt(item.h, 1, 40),
+            item.id,
+            dashboardId,
+          ).changes,
+        );
+      }
+      this.db.prepare('UPDATE dashboard SET updated_ms = ? WHERE id = ?').run(Date.now(), dashboardId);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return saved;
+  }
+
+  /** Remove one card. Returns the dashboard it was on so the caller can send the user back to it. */
+  removeDashboardCard(id: number): number {
+    const card = this.dashboardCard(id);
+    if (!card) return 0;
+    this.db.prepare('DELETE FROM dashboard_card WHERE id = ?').run(id);
+    this.db.prepare('UPDATE dashboard SET updated_ms = ? WHERE id = ?').run(Date.now(), card.dashboard_id);
+    return card.dashboard_id;
+  }
+
+  /**
+   * Every zone visit, added up per zone. One query, because a dashboard can show half a dozen
+   * cards that all group the same runs differently. `sinceMs` limits it to the dashboard card's
+   * time window.
+   */
+  zoneAggregates(sinceMs: number | null = null, character: string | null = null): ZoneAggregateRow[] {
+    const clauses: string[] = [];
+    const args: (number | string)[] = [];
+    if (sinceMs && sinceMs > 0) {
+      clauses.push('start_ms >= ?');
+      args.push(sinceMs);
+    }
+    if (character) {
+      clauses.push('character_name = ?');
+      args.push(character);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return this.db
+      .prepare(
+        `SELECT COALESCE(NULLIF(zone_name, ''), 'unknown zone') AS zone_name, kind,
+           COUNT(*) AS runs,
+           COALESCE(SUM(duration_s), 0) AS duration_s,
+           COALESCE(SUM(engaged_s), 0) AS engaged_s,
+           COALESCE(SUM(damage_done), 0) AS damage_done,
+           COALESCE(SUM(healing_done), 0) AS healing_done,
+           COALESCE(SUM(damage_taken), 0) AS damage_taken,
+           COALESCE(SUM(kills), 0) AS kills,
+           COALESCE(SUM(my_deaths), 0) AS my_deaths,
+           COALESCE(SUM(casts), 0) AS casts
+         FROM zone_segment ${where}
+         GROUP BY zone_name, kind
+         ORDER BY zone_name, kind`,
+      )
+      .all(...args) as unknown as ZoneAggregateRow[];
   }
 
   /** Names for the ids we have, best-effort. Missing ids are simply absent from the map. */
@@ -950,7 +1548,8 @@ export class Store {
     return this.db.prepare('SELECT * FROM log_file ORDER BY scanned_ms DESC').all() as unknown as Record<string, unknown>[];
   }
 
-  totals(): Totals {
+  totals(character: string | null = null): Totals {
+    const where = character ? 'WHERE character_name = ?' : '';
     return this.db
       .prepare(
         `SELECT COUNT(*) AS sessions,
@@ -963,14 +1562,19 @@ export class Store {
                 COALESCE(SUM(engaged_s),0) AS engagedS,
                 MIN(start_ms) AS firstMs,
                 MAX(end_ms) AS lastMs
-           FROM session`,
+           FROM session ${where}`,
       )
-      .get() as unknown as Totals;
+      .get(...(character ? [character] : [])) as unknown as Totals;
   }
 }
 
 function round(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  const v = Math.round(Number.isFinite(n) ? n : min);
+  return Math.min(Math.max(v, min), max);
 }
 
 /** Zone with the most time actually spent fighting, then damage, then time present. */

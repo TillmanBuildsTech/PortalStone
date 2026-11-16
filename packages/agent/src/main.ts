@@ -16,6 +16,7 @@ import { startServer } from './server';
 import { Store } from './store';
 import { parseMembers, sampleTracked } from './tracking';
 import { itemIdsIn, refreshItemNames } from './items';
+import { ensureSensorMetrics, readSensor } from './sensor';
 
 function arg(name: string, fallback: string | null = null): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -100,6 +101,11 @@ async function main(): Promise<void> {
     console.log(
       `scan: ${entries.length} log file(s), ${changed} updated, ${last.errors} error(s) · ${Date.now() - t0} ms`,
     );
+    // Our own addon, when it is installed: seed the series a fresh install would otherwise make the
+    // user pick by hand. Idempotent and cached, so it runs on every scan and costs one parse.
+    const sensor = readSensor(installs);
+    const seeded = ensureSensorMetrics(store, sensor);
+    if (seeded.length > 0) console.log(`  sensor: now tracking ${seeded.length} new series — ${seeded.join(', ')}`);
     // Tracked SavedVariables properties are sampled per flush, so this is cheap when nothing moved.
     const samples = sampleTracked(store, installs);
     for (const s of samples.filter((r) => r.recorded)) {

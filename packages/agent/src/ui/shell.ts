@@ -7,13 +7,25 @@
 import { ago, dur, esc, num, plural } from './format';
 import type { Ctx } from './context';
 
-export type NavKey = 'sessions' | 'runs' | 'bags' | 'addons' | 'tracked' | 'diagnostics';
+export type NavKey =
+  | 'sessions'
+  | 'dashboards'
+  | 'runs'
+  | 'pvp'
+  | 'bags'
+  | 'addons'
+  | 'sensor'
+  | 'tracked'
+  | 'diagnostics';
 
 const NAV: { key: NavKey; href: string; label: string }[] = [
   { key: 'sessions', href: '/', label: 'sessions' },
+  { key: 'dashboards', href: '/dashboards', label: 'dashboards' },
   { key: 'runs', href: '/runs', label: 'runs' },
+  { key: 'pvp', href: '/pvp', label: 'pvp' },
   { key: 'bags', href: '/bags', label: 'bags' },
   { key: 'addons', href: '/addons', label: 'addons' },
+  { key: 'sensor', href: '/sensor', label: 'sensor' },
   { key: 'tracked', href: '/tracked', label: 'tracked' },
   { key: 'diagnostics', href: '/diagnostics', label: 'diagnostics' },
 ];
@@ -36,14 +48,16 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 
 header { position: sticky; top: 0; z-index: 10; background: rgba(11,15,20,.92);
   border-bottom: 1px solid var(--line); backdrop-filter: blur(6px); }
-.bar { max-width: 1180px; margin: 0 auto; padding: 0 22px; height: 52px;
+.bar { max-width: 1180px; margin: 0 auto; padding: 0 22px; height: 52px; min-width: 0;
   display: flex; align-items: center; gap: 26px; }
 .brand { color: var(--ink-strong); font-weight: 650; letter-spacing: .01em; font-size: 15px;
   display: flex; align-items: center; gap: 8px; }
 .brand:hover { text-decoration: none; }
 .brand i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 3px rgba(110,168,254,.15); display: inline-block; }
-nav { display: flex; gap: 2px; align-items: stretch; height: 100%; }
+nav { display: flex; gap: 2px; align-items: stretch; height: 100%; min-width: 0;
+  overflow-x: auto; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
 nav a { color: var(--ink-dim); padding: 0 11px; display: flex; align-items: center;
   font-size: 13px; border-bottom: 2px solid transparent; }
 nav a:hover { color: var(--ink); text-decoration: none; }
@@ -90,6 +104,19 @@ tbody tr.live td { color: var(--good); }
 tbody tr.total td { border-top: 1px solid var(--line); }
 tbody tr.total td, tfoot td { color: var(--ink-strong); }
 td.wrap { white-space: normal; }
+
+/* A dense table: many columns, read by scanning numbers.
+ *
+ * The nowrap rule on every cell sets a table's minimum width to the sum of its longest
+ * unbroken strings, which is how a 13-column session list ends up wider than the page and scrolls
+ * sideways. Here cells wrap instead, so the table shrinks to the container and a long character
+ * name breaks rather than pushing the last column out of view. Numbers stay on one line because
+ * they have no spaces in them, and the tight padding buys back the room the meter used to take. */
+table.dense th, table.dense td { padding: 6px 7px; white-space: normal; }
+table.dense td { overflow-wrap: anywhere; }
+table.dense th { letter-spacing: .04em; }
+table.dense .meter { width: 46px; margin-top: 3px; }
+table.dense td.num, table.dense th.num { white-space: nowrap; }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11.5px; }
 
 .pill { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px;
@@ -98,7 +125,12 @@ td.wrap { white-space: normal; }
 .pill.raid { color: var(--raid); border-color: #3a2a54; }
 .pill.battleground { color: var(--warn); border-color: #4a3524; }
 .pill.city { color: var(--ink-dim); }
+.pill.spec { color: #a99ade; border-color: #332e46; border-style: dashed; }
 .pill.ok { color: var(--good); border-color: #22402b; }
+.pill.sel { color: var(--ink-strong); border-color: #2c5480; background: #16202c; }
+.chars { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 12px 0 0; }
+.chars .lbl { color: var(--ink-faint); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .07em; margin-right: 2px; }
 .pill.bad { color: var(--bad); border-color: #4a2b2b; }
 .pill.warn { color: var(--warn); border-color: #4a3524; }
 
@@ -118,6 +150,31 @@ svg .axis-label { fill: var(--ink-faint); font-size: 10px; }
 svg .bar-label { fill: var(--ink-dim); font-size: 9.5px; }
 svg .row-label { fill: var(--ink-dim); font-size: 11.5px; }
 svg a:hover .row-label { fill: var(--accent); }
+svg .pie-label { fill: var(--ink-dim); font-size: 10px; }
+svg .pie-value { fill: var(--ink-strong); font-size: 10px; font-variant-numeric: tabular-nums; }
+svg .pie-total { fill: var(--ink-strong); font-size: 15px; font-weight: 600; }
+svg .pie-caption { fill: var(--ink-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+
+/* A dashboard is a grid of cards (see /assets/dashboard.css for the gridstack skin). */
+.dash-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  padding: 12px 14px 10px; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.dash-hd { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.dash-hd .t { color: var(--ink-strong); font-size: 13px; font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-hd form { display: inline; }
+.dash-stat { font-size: 32px; line-height: 1.15; color: var(--ink-strong);
+  font-variant-numeric: tabular-nums; margin: 12px 0 4px; }
+.dash-note { color: var(--ink-faint); font-size: 11.5px; margin-top: auto; padding-top: 8px; }
+.form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin: 14px 0; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > label { color: var(--ink-faint); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .07em; }
+.field input[type="text"], .field select { background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 6px; padding: 7px 9px; font: inherit; min-width: 180px; }
+.field input[type="text"]:focus, .field select:focus { border-color: #2c5480; outline: none; }
+button.primary { background: #1b3a5f; border: 1px solid #2c5480; color: #cfe3ff; border-radius: 6px;
+  padding: 7px 14px; font: inherit; cursor: pointer; }
+button.primary:hover { background: #21476f; }
 
 .dist { position: relative; height: 18px; margin: 6px 0 2px; }
 .dist-track { position: absolute; left: 0; right: 0; top: 8px; height: 3px; background: #1b232d;
@@ -160,7 +217,8 @@ footer { max-width: 1180px; margin: 0 auto; padding: 0 22px 30px; color: var(--i
 
 @media (max-width: 700px) {
   .bar { gap: 14px; padding: 0 14px; }
-  nav a { padding: 0 7px; font-size: 12px; }
+  nav { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  nav a { padding: 0 7px; font-size: 12px; flex: 0 0 auto; }
   .status { display: none; }
   main { padding: 18px 14px 60px; }
   .card .v { font-size: 16px; }
@@ -173,12 +231,34 @@ export interface PageOptions {
   /** seconds between automatic reloads; only for pages that follow a live scan */
   refresh?: number;
   ctx?: Ctx;
+  /** stylesheets served by this app (e.g. /assets/dashboard.css) */
+  styles?: string[];
+  /** deferred scripts served by this app (e.g. /assets/dashboard.js) */
+  scripts?: string[];
+  /**
+   * This page adds characters up, so its nav links carry `?char=` and the switcher is offered.
+   * A page about one session or one run sets nothing: it is already about one character, and a
+   * scoped link to it would be a second, conflicting answer.
+   */
+  scope?: boolean;
+}
+
+/** Append the character scope to a link, so clicking through keeps the character you chose. */
+export function withCharacter(href: string, character: string | null | undefined): string {
+  if (!character) return href;
+  return `${href}${href.includes('?') ? '&' : '?'}char=${encodeURIComponent(character)}`;
 }
 
 export function page(title: string, body: string, opts: PageOptions = {}): string {
   const refresh = opts.refresh ? `<meta http-equiv="refresh" content="${opts.refresh}">` : '';
+  const styles = (opts.styles ?? []).map((href) => `<link rel="stylesheet" href="${esc(href)}">`).join('');
+  const scripts = (opts.scripts ?? []).map((src) => `<script src="${esc(src)}" defer></script>`).join('');
+  const char = opts.scope ? (opts.ctx?.character ?? null) : null;
   const nav = NAV.map(
-    (n) => `<a href="${n.href}"${n.key === opts.active ? ' class="on" aria-current="page"' : ''}>${n.label}</a>`,
+    (n) =>
+      `<a href="${esc(withCharacter(n.href, char))}"${
+        n.key === opts.active ? ' class="on" aria-current="page"' : ''
+      }>${n.label}</a>`,
   ).join('');
   const last = opts.ctx?.lastScan;
   const status = last
@@ -187,11 +267,34 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
     : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${refresh}
-<title>${esc(title)} · Portalstone</title><style>${CSS}</style></head>
+<title>${esc(title)} · Portalstone</title><style>${CSS}</style>${styles}${scripts}</head>
 <body><header><div class="bar"><a class="brand" href="/"><i></i>Portalstone</a><nav>${nav}</nav>
 <div class="status">${status}</div></div></header>
 <main>${body}</main>
 <footer>Portalstone · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
+}
+
+/** "who: all characters · Slouch Mage · Dead-Sadfatkid" — the scope switch for pages that sum. */
+export function characterBar(ctx: Ctx, base: string): string {
+  const roster = ctx.store.characters();
+  // One character is not a choice; showing a picker with a single option is noise.
+  if (roster.length < 2) return '';
+  const chip = (href: string, label: string, on: boolean, hint: string): string =>
+    `<a class="pill${on ? ' sel' : ''}" href="${esc(href)}" title="${esc(hint)}">${esc(label)}</a>`;
+  const parts = [
+    chip(base, 'all characters', ctx.character === null, `every character, added up — ${roster.length} of them`),
+  ];
+  for (const c of roster) {
+    parts.push(
+      chip(
+        withCharacter(base, c.name),
+        c.name,
+        ctx.character === c.name,
+        `${c.name} · ${c.sessions} session${c.sessions === 1 ? '' : 's'} · last played ${ago(c.last_ms)}`,
+      ),
+    );
+  }
+  return `<div class="chars"><span class="lbl">character</span>${parts.join(' ')}</div>`;
 }
 
 /** "kills 212 · deaths 1 · 3h 12m" — the line under every page title. */
@@ -223,12 +326,28 @@ export function kindPill(kind: string | null | undefined): string {
   return ` <span class="pill ${esc(kind)}">${esc(kind)}</span>`;
 }
 
+/**
+ * A specialization chip, dashed and always carrying its evidence.
+ *
+ * Every one of these is read from what was cast, not from the talent tree the game never writes to
+ * the log, so the tooltip states the ability and the count it rests on. No guess, no chip: a run
+ * with nothing talent-locked in it gets silence rather than a plausible label.
+ */
+export function specPill(spec: string | null | undefined, title: string): string {
+  if (!spec) return '';
+  return ` <span class="pill spec" title="${esc(title)}">${esc(spec.toLowerCase())}</span>`;
+}
+
 /** A table whose first column is the row's identity and the rest are numbers. */
-export function table(head: string[], rows: string[], opts: { left?: number[]; empty?: string } = {}): string {
+export function table(
+  head: string[],
+  rows: string[],
+  opts: { left?: number[]; empty?: string; dense?: boolean } = {},
+): string {
   if (rows.length === 0) return `<div class="empty">${esc(opts.empty ?? 'Nothing recorded yet.')}</div>`;
   const left = new Set(opts.left ?? [0]);
   const cls = (i: number): string => (left.has(i) ? ' class="l"' : '');
-  return `<div class="scroll"><table><thead><tr>${head
+  return `<div class="scroll"><table${opts.dense ? ' class="dense"' : ''}><thead><tr>${head
     .map((h, i) => `<th${cls(i)}>${h}</th>`)
     .join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 }

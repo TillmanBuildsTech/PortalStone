@@ -9,11 +9,14 @@
 import { listAddons, readAddon, type AddonRead } from '../../addons';
 import { isTable, type LuaValue } from '../../../../core/src/savedvars/lua';
 import {
+  collectValues,
+  entityOptions,
   flatten,
   formatPath,
   indexTree,
   introspect,
   pathKey,
+  pinEntity,
   previewScalar,
   resolvePath,
   segmentLabel,
@@ -127,7 +130,7 @@ function overview(read: AddonRead, id: string): string {
     </tr>`,
   );
 
-  const metricRows = numeric.map((c) => metricRow(id, c));
+  const metricRows = numeric.map((c) => metricRow(id, c, read));
 
   // Tables of scalars are trackable as sets (equipment slots, attunement flags). Surfacing them on
   // the overview is what makes "track my gear" a click instead of a hunt through the tree.
@@ -213,7 +216,7 @@ function overview(read: AddonRead, id: string): string {
     </div>`;
 }
 
-function metricRow(id: string, c: MetricCandidate): string {
+function metricRow(id: string, c: MetricCandidate, read: AddonRead): string {
   const range =
     c.numeric.min === c.numeric.max
       ? num(c.numeric.min)
@@ -232,8 +235,28 @@ function metricRow(id: string, c: MetricCandidate): string {
     <td>${range}</td>
     <td>${where}</td>
     <td class="l wrap">${c.samples.map((x) => `<span class="mono">${esc(x)}</span>`).join(', ') || '—'}</td>
-    <td>${c.constant ? '' : trackForm(id, c.path, c.label, guessUnit(c.path, c.label))}</td>
+    <td>${c.constant ? '' : trackForm(id, c.path, c.label, guessUnit(c.path, c.label), entityChoices(read, c.path))}</td>
   </tr>`;
+}
+
+/**
+ * The keys a wildcard stands for, for the track form's picker.
+ *
+ * Without this the only thing you can track from a folded path is the sum of every character's
+ * value — which for money is two wallets added into a number nobody owns, and for level is
+ * nonsense. With it, "track the alt's level" is one click.
+ */
+function entityChoices(read: AddonRead, path: string[]): string[] {
+  const global = read.globals.find((g) => g.name === path[0]);
+  if (!global) return [];
+  const rel = path.slice(1);
+  // Only keys this very path resolves through. A guild roster sits beside the characters under the
+  // same parent and has some fields in common, so it gets folded into the same `[*]` — but
+  // `forever["Origins*"].level` is not a thing, and offering it would create a series that can
+  // never sample.
+  return entityOptions(global.value, rel).filter(
+    (key) => collectValues(global.value, pinEntity(rel, key)).length > 0,
+  );
 }
 
 /**
@@ -247,13 +270,20 @@ function guessUnit(path: string[], label: string): string {
   return 'plain';
 }
 
-function trackForm(id: string, path: string[], label: string, unit: string): string {
+function trackForm(id: string, path: string[], label: string, unit: string, entities: string[] = []): string {
+  // The picker only exists when the path crosses a wildcard: a literal path has one subject.
+  const picker = entities.length
+    ? `<select name="entity" class="unit" title="which entity this series is about">
+         <option value="">all (sum of ${entities.length})</option>
+         ${entities.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+       </select> `
+    : '';
   return `<form method="post" action="/track" style="display:inline">
       <input type="hidden" name="f" value="${esc(id)}">
       <input type="hidden" name="path" value="${esc(encodePath(path))}">
       <input type="hidden" name="label" value="${esc(label)}">
       <input type="hidden" name="unit" value="${esc(unit)}">
-      <button type="submit" class="linkbtn">track</button>
+      ${picker}<button type="submit" class="linkbtn">track</button>
     </form>`;
 }
 
@@ -413,7 +443,7 @@ function searchWithin(read: AddonRead, q: string, id: string): string {
     ${section(
       'matching numbers',
       numeric.length
-        ? table(['property', 'kind', 'range', 'seen in', 'examples', ''], numeric.map((c) => metricRow(id, c)), { left: [0, 4] })
+        ? table(['property', 'kind', 'range', 'seen in', 'examples', ''], numeric.map((c) => metricRow(id, c, read)), { left: [0, 4] })
         : `<div class="empty">No numbers match “${esc(q)}”.</div>`,
     )}
     ${section(

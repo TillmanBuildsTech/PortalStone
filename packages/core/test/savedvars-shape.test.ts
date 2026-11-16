@@ -4,6 +4,9 @@ import {
   canonicalPath,
   collectEntries,
   collectValues,
+  entityOptions,
+  hasEntity,
+  pinEntity,
   flatten,
   formatPath,
   introspect,
@@ -161,5 +164,44 @@ describe('savedvars introspection', () => {
     const nodes = flatten(shape.root);
     expect(nodes).toHaveLength(1);
     expect(nodes[0]!.numeric!.max).toBe(42);
+  });
+});
+
+
+describe('entity options', () => {
+  const value = parseSavedVariables(
+    `BrotherBags = {
+["forever"] = {
+["Dead Sadfatkid"] = { ["level"] = 32, ["money"] = 167998 },
+["Slouch Mage"] = { ["level"] = 10, ["money"] = 5122 },
+},
+}
+`,
+  ).globals[0]!.value;
+
+  it('names the keys a wildcard stands for', () => {
+    expect(entityOptions(value, ['forever', '*', 'level']).sort()).toEqual(['Dead Sadfatkid', 'Slouch Mage']);
+  });
+
+  it('pins the first wildcard and leaves the rest of the path alone', () => {
+    expect(pinEntity(['forever', '*', 'equip', '*'], 'Slouch Mage')).toEqual([
+      'forever',
+      'Slouch Mage',
+      'equip',
+      '*',
+    ]);
+    // a literal path has nothing to pin
+    expect(pinEntity(['forever', 'Slouch Mage', 'level'], 'Dead Sadfatkid')).toEqual([
+      'forever',
+      'Slouch Mage',
+      'level',
+    ]);
+  });
+
+  it('reports whether an entity is really there', () => {
+    expect(hasEntity(value, ['forever', '*', 'level'], 'Slouch Mage')).toBe(true);
+    expect(hasEntity(value, ['forever', '*', 'level'], 'Nobody')).toBe(false);
+    // and the pinned path resolves to that entity's own value, not to a sum
+    expect(collectValues(value, pinEntity(['forever', '*', 'level'], 'Slouch Mage'))).toEqual([10]);
   });
 });

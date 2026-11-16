@@ -13,4 +13,15 @@ export interface Ctx {
   installs: InstallInfo[];
   lastScan: LastScan;
   dbPath: string;
+  /**
+   * The character every page on this request is scoped to, or null for "all of them".
+   *
+   * Set from `?char=` and validated against the roster, because a stale bookmark must not turn a
+   * typo into an empty page: an unknown name falls back to all characters. Pages that add sessions
+   * up pass this to the store; a page about one session or one run ignores it, since that already
+   * belongs to exactly one character.
+   */
+  character: string | null;
+  /** the same character, ready to paste into a query string (`?char=…` or `&char=…`) */
+  charQuery: string;
 }

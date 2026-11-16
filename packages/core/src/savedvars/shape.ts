@@ -210,6 +210,41 @@ export function resolvePath(value: LuaValue, segments: string[]): LuaValue | und
 }
 
 /**
+ * The real keys behind the *first* wildcard in a path.
+ *
+ * A folded path says `forever[*].money`: one wallet per character. Tracking that sums two people's
+ * money into a number neither of them has. This returns the names the wildcard stands for
+ * (`forever["Slouch Mage"].money`), so a metric can be pinned to one entity instead of all of them.
+ *
+ * Only the first wildcard is expanded, on purpose. In every addon shape seen so far the first one
+ * is the character and later ones are rows inside that character's data (bank slots, quest ids),
+ * where a key from this level would point at nothing.
+ */
+export function entityOptions(value: LuaValue, segments: string[]): string[] {
+  let cur: LuaValue | undefined = value;
+  for (const seg of segments) {
+    if (!isTable(cur)) return [];
+    if (seg === '*') return cur.entries.map(([k]) => String(k));
+    const hit: [LuaKey, LuaValue] | undefined = cur.entries.find(([k]) => String(k) === seg);
+    if (!hit) return [];
+    cur = hit[1];
+  }
+  return [];
+}
+
+/** The same path with the first wildcard replaced by a concrete key, or the path unchanged. */
+export function pinEntity(segments: string[], entity: string): string[] {
+  const at = segments.indexOf('*');
+  if (at < 0) return segments;
+  return segments.map((s, i) => (i === at ? entity : s));
+}
+
+/** Does this path, pinned to `entity`, still resolve in the given value? */
+export function hasEntity(value: LuaValue, segments: string[], entity: string): boolean {
+  return entityOptions(value, segments).includes(entity);
+}
+
+/**
  * Every value a path reaches, keeping the key that produced it.
  *
  * Tracking a number needs values; tracking equipment needs *slots*, so a change reads

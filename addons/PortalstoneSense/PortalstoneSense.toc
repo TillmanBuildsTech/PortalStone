@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: Portalstone Sensor
+## Notes: Writes what the combat log cannot: spec and talents, gear and item level, professions, lockouts, played time, group.
+## Author: Portalstone
+## Version: 1.0.0
+## Category: Interface Enhancements
+## X-Category: Interface Enhancements
+## IconTexture: Interface\Icons\INV_Misc_Spyglass_02
+## SavedVariables: PortalstoneDB
+
+PortalstoneSense.lua

@@ -6,13 +6,14 @@
  */
 import { throughput } from '../../../../core/src/throughput';
 import { timelineChart } from '../charts';
-import { cards, emptyState, kindPill, metas, page, section, table } from '../shell';
+import { cards, emptyState, kindPill, metas, page, section, specPill, table } from '../shell';
 import { dayLabel, delta, dur, esc, num, pct, quantity, when } from '../format';
 import { abilityTable, castsByRankTable } from '../parts';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
-import { changesAcrossSessions } from '../../tracking';
+import { changesAcrossSessions, changesAfterSession, type SessionChange } from '../../tracking';
 import { itemLabel, slotName } from '../gear';
+import { sessionSpecLine, specForSession, specTitle } from '../specInfo';
 
 export function renderSession(ctx: Ctx, id: number): string | null {
   const store = ctx.store;
@@ -33,17 +34,34 @@ export function renderSession(ctx: Ctx, id: number): string | null {
   const dtps = t.basisS > 0 ? Math.round(s.damage_taken / t.basisS) : 0;
 
   // Gold (or any tracked property) across this session: the balance at the last flush before it
-  // began and at the first flush after it ended. No bracket means unknown, never zero.
+  // began and at the first flush after it ended. No bracket means unknown, never zero. Flushes that
+  // follow with no later session to claim them are shown separately: play after the last combat
+  // event writes nothing to the combat log, but it does change these values.
   const tracked = store.trackedMetrics();
+  const samplesByMetric = new Map(tracked.map((m) => [m.id, store.samples(m.id, 1000)]));
+  const allSessions = store
+    .listSessions(500)
+    .map((row) => ({ id: row.id, start_ms: row.start_ms, end_ms: row.end_ms }));
   const trackedChanges = tracked.length
-    ? (changesAcrossSessions(
+    ? (changesAcrossSessions(tracked, samplesByMetric, allSessions).get(id) ?? [])
+    : [];
+  const nextSession = allSessions
+    .filter((row) => row.start_ms > s.start_ms)
+    .sort((a, b) => a.start_ms - b.start_ms)[0];
+  const afterChanges = tracked.length
+    ? changesAfterSession(
         tracked,
-        new Map(tracked.map((m) => [m.id, store.samples(m.id, 1000)])),
-        store.listSessions(500).map((row) => ({ id: row.id, start_ms: row.start_ms, end_ms: row.end_ms })),
-      ).get(id) ?? [])
+        samplesByMetric,
+        { id: s.id, start_ms: s.start_ms, end_ms: s.end_ms },
+        nextSession?.start_ms ?? null,
+      )
     : [];
   const runs = segments.map((seg) => ({ seg, st: throughputFrom(seg) }));
   const maxRate = Math.max(...runs.map((r) => r.st.rate), 1);
+  // What the abilities say about the build. A session that straddles a respec reads "mixed" on
+  // throughput, which is true and useless; the phases date the switch instead.
+  const spec = specForSession(store, segments);
+  const specLine = sessionSpecLine(spec, s.offset_min);
 
   const chart = timelineChart(
     segments.map((seg) => ({
@@ -67,8 +85,11 @@ export function renderSession(ctx: Ctx, id: number): string | null {
 
   const runRows = runs.map(({ seg, st }) => {
     const href = `/run?id=${seg.id}`;
+    const guess = spec.bySegment.get(seg.id) ?? null;
     return `<tr>
-      <td class="l"><a href="${href}">${seg.zone_name}</a>${kindPill(seg.kind)}</td>
+      <td class="l"><a href="${href}">${seg.zone_name}</a>${kindPill(seg.kind)}${
+        specPill(guess?.spec, guess ? specTitle(guess) : '')
+      }</td>
       <td>${when(seg.start_ms, s.offset_min)} → ${when(seg.end_ms, s.offset_min)}</td>
       <td>${dur(seg.duration_s)}</td>
       <td>${dur(seg.engaged_s)}</td>
@@ -149,42 +170,23 @@ export function renderSession(ctx: Ctx, id: number): string | null {
     (t.kind === 'healing' ? healingSection + damageSection + takenSection : damageSection + healingSection + takenSection) +
     castsSection;
 
-  const trackedRows = trackedChanges.map((c) => {
-    const setDetail =
-      c.setChange && c.metric.kind === 'set'
-        ? [
-            ...c.setChange.added.map((m) => `+ ${slotName(m.k)} ${itemLabel(m.v)}`),
-            ...c.setChange.changed.map((m) => `~ ${slotName(m.k)} ${itemLabel(m.from)} → ${itemLabel(m.to)}`),
-            ...c.setChange.removed.map((m) => `− ${slotName(m.k)} ${itemLabel(m.v)}`),
-          ].join(' · ')
-        : '';
-    const changeCell =
-      c.metric.kind === 'set'
-        ? c.setChange
-          ? `<span class="sub">${c.setChange.added.length + c.setChange.changed.length + c.setChange.removed.length === 0 ? 'no change' : setDetail}</span>${
-              c.shared > 1 ? ` <span class="pill warn">shared across ${c.shared}</span>` : ''
-            }`
-          : `<span class="sub">${c.before ? 'no flush since this session ended' : 'no flush before this session began'}</span>`
-        : c.change === null
-          ? `<span class="sub">${c.before ? 'no flush since this session ended' : 'no flush before this session began'}</span>`
-          : `${delta(c.change, c.metric.unit)}${
-              c.shared > 1 ? ` <span class="pill warn">shared across ${c.shared} sessions</span>` : ''
-            }`;
-    return `<tr>
-      <td class="l"><a href="/tracked">${esc(c.metric.label)}</a></td>
-      <td>${c.before ? (c.metric.kind === 'set' ? `${num(c.before.value)}` : quantity(c.before.value, c.metric.unit)) : '—'}</td>
-      <td>${c.after ? (c.metric.kind === 'set' ? `${num(c.after.value)}` : quantity(c.after.value, c.metric.unit)) : '—'}</td>
-      <td>${changeCell}</td>
-      <td class="l sub">${
-        c.before && c.after ? `${when(c.before.ts_ms, s.offset_min)} → ${when(c.after.ts_ms, s.offset_min)}` : ''
-      }</td>
-    </tr>`;
-  });
   const trackedSection = trackedChanges.length
     ? section(
         'tracked values over this session',
-        table(['value', 'before', 'after', 'change', 'flushes'], trackedRows, { left: [0, 4] }),
+        trackedChangesTable(trackedChanges, s.offset_min),
         'SavedVariables are balances, not transactions: the change is the gap between two flushes',
+      )
+    : '';
+  const afterSection = afterChanges.length
+    ? section(
+        'after this session',
+        trackedChangesTable(afterChanges, s.offset_min),
+        nextSession
+          ? 'flushes between the end of this session and the start of the next one · no session covers them'
+          : `flushes after this session ended, with no later session to claim them · the combat log recorded nothing after ${when(
+              s.end_ms,
+              s.offset_min,
+            )}, so a play sitting that produced no combat leaves no session behind`,
       )
     : '';
 
@@ -198,6 +200,7 @@ export function renderSession(ctx: Ctx, id: number): string | null {
       dur(s.duration_s),
       s.character_name ? esc(s.character_name) : null,
       `<span class="pill">${t.mixed ? 'mixed' : `${t.kind}-led`}</span>`,
+      specLine,
       `${num(segments.length)} zone visit${segments.length === 1 ? '' : 's'}`,
     ])}
     ${cards([
@@ -216,7 +219,7 @@ export function renderSession(ctx: Ctx, id: number): string | null {
       { k: 'casts', v: num(s.casts) },
       { k: 'interrupts', v: num(s.interrupts) },
     ])}
-    ${trackedSection}
+    ${trackedSection}${afterSection}
     ${
       segments.length
         ? section('where the session went', chart, 'bar length is time in that zone · click a bar to open the run')
@@ -264,4 +267,56 @@ export function renderSession(ctx: Ctx, id: number): string | null {
     ${abilitySections}`;
 
   return page(s.zone_name || 'Session', body, { active: 'sessions', ctx });
+}
+
+/** The tracked-value table, used both for the session bracket and for the flushes after it. */
+function trackedChangesTable(changes: SessionChange[], offsetMin: number): string {
+  return table(
+    ['value', 'before', 'after', 'change', 'flushes'],
+    changes.map((c) => trackedChangeRow(c, offsetMin)),
+    { left: [0, 4] },
+  );
+}
+
+function trackedChangeRow(c: SessionChange, offsetMin: number): string {
+  const setDetail =
+    c.setChange && c.metric.kind === 'set'
+      ? [
+          ...c.setChange.added.map((m) => `+ ${slotName(m.k)} ${itemLabel(m.v)}`),
+          ...c.setChange.changed.map((m) => `~ ${slotName(m.k)} ${itemLabel(m.from)} → ${itemLabel(m.to)}`),
+          ...c.setChange.removed.map((m) => `− ${slotName(m.k)} ${itemLabel(m.v)}`),
+        ].join(' · ')
+      : '';
+  const changeCell =
+    c.metric.kind === 'set'
+      ? c.setChange
+        ? `<span class="sub">${c.setChange.added.length + c.setChange.changed.length + c.setChange.removed.length === 0 ? 'no change' : setDetail}</span>${
+            c.shared > 1 ? ` <span class="pill warn">shared across ${c.shared}</span>` : ''
+          }`
+        : `<span class="sub">${c.before ? 'no flush since this session ended' : 'no flush before this session began'}</span>`
+      : c.change === null
+        ? `<span class="sub">${c.before ? 'no flush since this session ended' : 'no flush before this session began'}</span>`
+        : c.change === 0
+          ? '<span class="sub">no change</span>'
+          : `${delta(c.change, c.metric.unit)}${
+              c.shared > 1 ? ` <span class="pill warn">shared across ${c.shared} sessions</span>` : ''
+            }`;
+
+  // A wildcard path such as `forever.*.money` sums one value per character. Without saying so, the
+  // number reads as a single wallet — and a spend on one character can be masked by another.
+  const instances = c.metric.kind === 'set' ? 0 : (c.after ?? c.before)?.instances ?? 0;
+  const sumHint =
+    instances > 1
+      ? ` <span class="sub" title="the tracked path matched ${num(instances)} values at this flush — one per character, for example">sum of ${num(instances)}</span>`
+      : '';
+
+  return `<tr>
+    <td class="l"><a href="/tracked">${esc(c.metric.label)}</a>${sumHint}</td>
+    <td>${c.before ? (c.metric.kind === 'set' ? `${num(c.before.value)}` : quantity(c.before.value, c.metric.unit)) : '—'}</td>
+    <td>${c.after ? (c.metric.kind === 'set' ? `${num(c.after.value)}` : quantity(c.after.value, c.metric.unit)) : '—'}</td>
+    <td>${changeCell}</td>
+    <td class="l sub">${
+      c.before && c.after ? `${when(c.before.ts_ms, offsetMin)} → ${when(c.after.ts_ms, offsetMin)}` : ''
+    }</td>
+  </tr>`;
 }

@@ -40,8 +40,29 @@ export interface CastStat {
 export interface DeathRecord {
   ms: number;
   name: string;
+  /** who landed the last hit — a player's name in PvP, 'unknown' when the log never said */
   killer: string;
+  killerGuid: string | null;
+  /** the killer was a player, not a creature: that is what makes a death PvP rather than PvE */
+  killerPlayer: boolean;
+  /** the ability that landed the last hit */
+  spell: string;
   mine: boolean;
+}
+
+/**
+ * One side of a player-versus-player exchange.
+ *
+ * `kill` is someone you killed; `death` is whoever killed you. Both carry the *person*, never the
+ * mob and never the spell: "who killed me" is a question about a player, and the ability is
+ * evidence, not an answer.
+ */
+export interface PvpRecord {
+  ms: number;
+  name: string;
+  guid: string | null;
+  /** the ability that landed it, '' when the log does not say (a PARTY_KILL line has no payload) */
+  spell: string;
 }
 
 /** Fold one ability line into another (used when two segments of the same visit are merged). */
@@ -54,6 +75,24 @@ function mergeAbility(target: Map<number, AbilityStat>, key: number, v: AbilityS
   cur.amount += v.amount;
   cur.hits += v.hits;
   cur.crits += v.crits;
+}
+
+interface LastHit {
+  mine: boolean;
+  /** the attacker's name: a player in PvP, the creature or pet that hit last otherwise */
+  attacker: string;
+  attackerGuid: string;
+  /** the attacker was a player unit — the difference between a PvP death and a PvE one */
+  player: boolean;
+  spell: string;
+}
+
+/** The most recent hit landed by a player, kept even when a pet or a mob lands the last one. */
+interface PlayerHit {
+  guid: string;
+  name: string;
+  spell: string;
+  ms: number;
 }
 
 export class Bag {
@@ -85,6 +124,10 @@ export class Bag {
   readonly castFailures = new Map<string, number>();
   readonly killedNames = new Map<string, number>();
   readonly deathLog: DeathRecord[] = [];
+  /** player victims you landed the last hit on */
+  readonly pvpKills: PvpRecord[] = [];
+  /** players who landed the last hit on you */
+  readonly pvpDeaths: PvpRecord[] = [];
   /** distinct players seen dying (one player can die several times) */
   readonly deathVictims = new Set<string>();
 
@@ -144,6 +187,8 @@ export class Bag {
       this.killedNames.set(key, (this.killedNames.get(key) ?? 0) + v);
     }
     this.deathLog.push(...other.deathLog);
+    this.pvpKills.push(...other.pvpKills);
+    this.pvpDeaths.push(...other.pvpDeaths);
     for (const victim of other.deathVictims) this.deathVictims.add(victim);
   }
 
@@ -242,6 +287,8 @@ export class Bag {
       misses: counted(this.misses, 6),
       castFailures: counted(this.castFailures, 6),
       topKills: counted(this.killedNames, 5),
+      pvpKills: [...this.pvpKills],
+      pvpDeaths: [...this.pvpDeaths],
     };
   }
 }
@@ -275,6 +322,9 @@ export interface BagSnapshot {
   misses: [string, number][];
   castFailures: [string, number][];
   topKills: [string, number][];
+  /** player-versus-player: who you killed, and who killed you, one record per event */
+  pvpKills: PvpRecord[];
+  pvpDeaths: PvpRecord[];
 }
 
 export interface EncounterResult {
@@ -300,6 +350,16 @@ export interface SessionResult {
   kind: 'session';
   startMs: number;
   endMs: number;
+  /**
+   * Whose session this is.
+   *
+   * A log file is per *client launch*, not per character: log out to another toon and keep playing
+   * without restarting, and both toons write into one file. The identity therefore belongs to the
+   * session, not to the file — latching it once per read labelled every later session with the
+   * first character's name.
+   */
+  selfGuid: string | null;
+  selfName: string | null;
   /** byte offset in the log where this session's first event line began (for cheap resume) */
   startByte: number;
   offsetMin: number;
@@ -320,6 +380,11 @@ export interface AggregatorOptions {
   selfGuids?: string[];
   /** zone already in effect when the first byte is read (resumed reads) */
   startZone?: { id: number | null; name: string };
+  /**
+   * Character already known when the first byte is read. A resumed read starts mid-session, after
+   * the events that identified the player, so without this the re-read session would have no name.
+   */
+  startSelf?: { guid: string | null; name: string | null };
 }
 
 export class Aggregator {
@@ -339,7 +404,24 @@ export class Aggregator {
 
   private cur: SessionResult | null = null;
   private enc: EncounterResult | null = null;
-  private readonly lastHitBy = new Map<string, { mine: boolean; name: string }>();
+  /**
+   * Who hit a unit last, which is the only way the log attributes a kill.
+   *
+   * It used to store the spell name here, so `deathLog.killer` read "Fireball" or "Melee" where
+   * a player's name belonged — fine for "what killed me", useless for "who killed me".
+   */
+  private readonly lastHitBy = new Map<string, LastHit>();
+  /**
+   * The last hit a *player* landed on a unit, with its time.
+   *
+   * A hunter's pet is the killing blow often enough to matter, and the log names the pet
+   * ("Cockadile"), not its owner: the pet's guid has no owner in it and no summon line to follow.
+   * So "who killed me" is answered by the last player who hit me just before I died — the person
+   * whose pet it was — rather than by neither.
+   */
+  private readonly lastPlayerHitBy = new Map<string, PlayerHit>();
+  /** how recently a player must have hit you for their pet's killing blow to count as theirs */
+  private readonly playerHitWindowMs = 20_000;
   /** byte offset of the line currently being pushed, used to mark where a session began */
   private lastByte = 0;
   private readonly sessionGapMs: number;
@@ -356,6 +438,10 @@ export class Aggregator {
     if (opts.startZone) {
       this.zoneId = opts.startZone.id;
       this.zoneName = opts.startZone.name;
+    }
+    if (opts.startSelf) {
+      this.selfGuid = opts.startSelf.guid;
+      this.selfName = opts.startSelf.name;
     }
   }
 
@@ -374,6 +460,10 @@ export class Aggregator {
       kind: 'session',
       startMs: ms,
       endMs: ms,
+      // Whatever is known when the session opens: on a resumed read that comes from startSelf,
+      // and otherwise noteSelf fills it in as soon as the player acts.
+      selfGuid: this.selfGuid,
+      selfName: this.selfName,
       startByte: byteOffset,
       offsetMin: this.offsetMin ?? 0,
       zoneId: this.zoneId,
@@ -400,12 +490,46 @@ export class Aggregator {
     return this.selfGuids.has(guid);
   }
 
+  /**
+   * Who is playing, and — when it changes — a new session for the new character.
+   *
+   * Only a `Player-` guid can become the self: every unit you control carries the affiliation flag,
+   * pets and totems included, so accepting any flagged guid would have made the pet the player.
+   * A *different* player guid carrying the flag is not noise — it is the client having switched
+   * characters in the same log file, which is normal on a server where you relog between alts.
+   *
+   * The switch closes the open session so the next event starts a fresh one. One event (the one
+   * that revealed the switch) still lands in the previous session: it was already counted before
+   * this ran. That is one event of bleed, where the alternative was a whole file's worth.
+   */
   private noteSelf(guid: string, name: string, flags: number): void {
-    if (this.selfGuid !== null) return;
-    if ((flags & FLAG.MINE) === 0 && !this.selfGuids.has(guid)) return;
     if (!guid.startsWith('Player-')) return; // pets carry the flag too; prefer the player
+    if ((flags & FLAG.MINE) === 0 && !this.selfGuids.has(guid)) return;
+    if (guid === this.selfGuid) {
+      if (!this.selfName && name) {
+        this.selfName = name;
+        if (this.cur) this.cur.selfName = name;
+      }
+      return;
+    }
+    if (this.selfGuid === null) {
+      // First identification of the read: the session already open belongs to this character, so
+      // adopt it. Closing here would cut every session in two — one event, then the rest.
+      this.selfGuid = guid;
+      this.selfName = name || null;
+      if (this.cur) {
+        this.cur.selfGuid = this.selfGuid;
+        this.cur.selfName = this.selfName;
+      }
+      return;
+    }
+    // A different player, with a character already known: the client switched toons in this file.
+    if (this.cur) {
+      this.closeEncounter(null, this.cur.endMs);
+      this.cur = null;
+    }
     this.selfGuid = guid;
-    this.selfName = name;
+    this.selfName = name || this.selfName;
   }
 
   /** Unmatched swing rolls, held for a moment so a landed twin can cancel them. Forever logs emit
@@ -511,19 +635,46 @@ export class Aggregator {
     const s = this.ensureSession(ms, this.lastByte);
     const bags = this.sinkBags(s);
     const mineSrc = this.isMine(ev.srcFlags, ev.srcGuid);
-    this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
     if (mineSrc && ev.amount > 0) {
       for (const bag of bags) {
         bag.addDamage(ev.spellId, ev.spellName, ev.amount, ev.isCrit);
         bag.markActivity(ms);
       }
-      this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.spellName });
+      this.lastHitBy.set(ev.dstGuid, {
+        mine: true,
+        attacker: ev.srcName,
+        attackerGuid: ev.srcGuid,
+        player: (ev.srcFlags & FLAG.PLAYER) !== 0,
+        spell: ev.spellName,
+      });
+      if ((ev.srcFlags & FLAG.PLAYER) !== 0) {
+        this.lastPlayerHitBy.set(ev.dstGuid, {
+          guid: ev.srcGuid,
+          name: ev.srcName,
+          spell: ev.spellName,
+          ms,
+        });
+      }
     }
     if (this.isMine(ev.dstFlags, ev.dstGuid) && ev.amount > 0) {
       for (const bag of bags) bag.addTaken(ev.spellId, ev.spellName, ev.amount);
     }
     if (!mineSrc && ev.amount > 0) {
-      this.lastHitBy.set(ev.dstGuid, { mine: false, name: ev.spellName });
+      this.lastHitBy.set(ev.dstGuid, {
+        mine: false,
+        attacker: ev.srcName,
+        attackerGuid: ev.srcGuid,
+        player: (ev.srcFlags & FLAG.PLAYER) !== 0,
+        spell: ev.spellName,
+      });
+      if ((ev.srcFlags & FLAG.PLAYER) !== 0) {
+        this.lastPlayerHitBy.set(ev.dstGuid, {
+          guid: ev.srcGuid,
+          name: ev.srcName,
+          spell: ev.spellName,
+          ms,
+        });
+      }
     }
   }
 
@@ -616,6 +767,11 @@ export class Aggregator {
       return;
     }
 
+    // Who is acting, before anything is counted. A switch of character closes the open session
+    // here, so the event that reveals it starts the new character's session rather than bleeding
+    // into the previous one's totals.
+    if (ev.t === 'damage' || ev.t === 'cast') this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
+
     // Anything else is activity: it opens/extends a session and may time out an encounter.
     const s = this.ensureSession(ms, this.lastByte);
     if (this.enc && ms - this.enc.bag.lastMs > this.encounterGapMs) this.closeEncounter(null, ms);
@@ -659,7 +815,6 @@ export class Aggregator {
             bag.markActivity(ms);
           }
         }
-        this.noteSelf(ev.srcGuid, ev.srcName, ev.srcFlags);
         if (ev.spellId === BAG_SPELL && ev.pos) {
           this.bagDrops.drop(ms, ev.srcGuid, ev.srcName, this.isMine(ev.srcFlags, ev.srcGuid), ev.pos);
         }
@@ -685,7 +840,14 @@ export class Aggregator {
       }
       case 'kill': {
         if (this.isMine(ev.srcFlags, ev.srcGuid)) {
-          this.lastHitBy.set(ev.dstGuid, { mine: true, name: ev.dstName });
+          // PARTY_KILL carries no payload: the killer is us, the ability is unknown.
+          this.lastHitBy.set(ev.dstGuid, {
+            mine: true,
+            attacker: '',
+            attackerGuid: ev.srcGuid,
+            player: false,
+            spell: '',
+          });
         }
         return;
       }
@@ -694,10 +856,21 @@ export class Aggregator {
         const last = this.lastHitBy.get(ev.guid);
         const isPlayer = (ev.flags & FLAG.PLAYER) !== 0;
         const killedByMe = last?.mine === true && ev.guid !== this.selfGuid;
+        // A player killed by someone other than themselves: that is PvP, and the killer's name is
+        // the whole point of keeping it.
+        const killer = last?.attacker || 'unknown';
         for (const bag of bags) {
           if (isPlayer) {
             bag.deaths++;
-            bag.deathLog.push({ ms, name: ev.name, killer: last?.name ?? 'unknown', mine });
+            bag.deathLog.push({
+              ms,
+              name: ev.name,
+              killer,
+              killerGuid: last?.attackerGuid ?? null,
+              killerPlayer: last?.player === true,
+              spell: last?.spell ?? '',
+              mine,
+            });
             if (mine) bag.myDeaths++;
             if (ev.guid) bag.deathVictims.add(ev.guid);
           }
@@ -707,6 +880,32 @@ export class Aggregator {
           if (killedByMe) {
             bag.kills++;
             bag.bump(bag.killedNames, ev.name || 'unknown');
+            // A player victim is PvP. Named, because "one of my kills was a person" is worth
+            // less than "I killed Uncle-Garry, twice".
+            if (isPlayer) {
+              bag.pvpKills.push({
+                ms,
+                name: ev.name || 'unknown',
+                guid: ev.guid || null,
+                spell: last?.spell ?? '',
+              });
+            }
+          }
+          // They killed you. If a player landed the last hit, that is the answer; if a pet or a mob
+        // did, the answer is the player who hit you moments before — a hunter's pet finishing you
+        // is still the hunter. Neither present means the log does not say, and nothing is invented.
+          if (mine && isPlayer) {
+            const recent = this.lastPlayerHitBy.get(ev.guid);
+            const byPlayer =
+              last?.player === true && last.attackerGuid !== this.selfGuid
+                ? { name: killer, guid: last.attackerGuid || null, spell: last.spell }
+                : recent &&
+                    recent.guid !== this.selfGuid &&
+                    ms - recent.ms <= this.playerHitWindowMs &&
+                    recent.name
+                  ? { name: recent.name, guid: recent.guid, spell: recent.spell }
+                  : null;
+            if (byPlayer) bag.pvpDeaths.push({ ms, ...byPlayer });
           }
           // Field kills are not "yours": they are what died around you. Enemies in PvP are
           // counted as your kills only via the last-hit rule above, never here.

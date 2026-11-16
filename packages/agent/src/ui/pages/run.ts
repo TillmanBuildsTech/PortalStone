@@ -6,11 +6,12 @@
  * comparison is the part only this app can offer, because it has every run you have ever logged.
  */
 import { distribution } from '../charts';
-import { cards, kindPill, metas, page, section } from '../shell';
+import { cards, kindPill, metas, page, section, specPill } from '../shell';
 import { compact, dur, esc, num, pct, when } from '../format';
 import { abilityTable, castsByRankTable } from '../parts';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
+import { specEvidenceText, specForRun, specTitle } from '../specInfo';
 
 export function renderRun(ctx: Ctx, id: number): string | null {
   const store = ctx.store;
@@ -24,12 +25,17 @@ export function renderRun(ctx: Ctx, id: number): string | null {
 
   const t = throughputFrom(seg);
   const dtps = t.basisS > 0 ? Math.round(seg.damage_taken / t.basisS) : 0;
+  // What this run's abilities say about the build. Null when no talent-locked ability appears,
+  // which is the honest answer for a build whose tree leaves no trace in the log.
+  const specGuess = specForRun(store, seg.id);
   const sessionTotal = session ? session.damage_done + session.healing_done : 0;
   const runTotal = seg.damage_done + seg.healing_done;
 
-  // Comparison basis: the same zone on this character, this run excluded.
+  // Comparison basis: the same zone on this character, this run excluded. Naming the character is
+  // the whole point: an alt leveling through the same zone would otherwise become the median the
+  // main is measured against, which is a comparison between two different characters.
   const others = store
-    .runsForZone(seg.zone_name, 200)
+    .runsForZone(seg.zone_name, 200, seg.character_name)
     .filter((r) => r.id !== seg.id)
     .map((r) => throughputFrom(r));
   const comparable = others.filter((o) => o.kind === t.kind && o.rate > 0 && o.total > 0);
@@ -63,7 +69,9 @@ export function renderRun(ctx: Ctx, id: number): string | null {
                t.rate >= median ? 'above' : 'below'
              } your median.</div>
            </div></div>`,
-          `${comparable.length} other run${comparable.length === 1 ? '' : 's'} of this zone logged`,
+          `${comparable.length} other run${comparable.length === 1 ? '' : 's'} of this zone logged${
+            seg.character_name ? ` on ${seg.character_name}` : ''
+          }`,
         );
 
   const takenSection = abilityTable({
@@ -107,13 +115,16 @@ export function renderRun(ctx: Ctx, id: number): string | null {
   const body = `
     <div class="crumbs"><a href="/">sessions</a> <span>/</span> ${sessionLink}
       <span>/</span> <span>run ${index + 1} of ${siblings.length}</span></div>
-    <h1>${seg.zone_name}${kindPill(seg.kind)}</h1>
+    <h1>${seg.zone_name}${kindPill(seg.kind)}${
+      specGuess ? specPill(specGuess.spec, specTitle(specGuess)) : ''
+    }</h1>
     ${metas([
       `${when(seg.start_ms, session?.offset_min ?? 0)} → ${when(seg.end_ms, session?.offset_min ?? 0)}`,
       dur(seg.duration_s),
       `${dur(seg.engaged_s)} in combat`,
       session ? `run ${index + 1} of ${siblings.length} in this session` : null,
       session ? `${pct(runTotal, sessionTotal, 0)} of the session's output` : null,
+      specGuess ? `spec inferred from ${specEvidenceText(specGuess)}` : null,
     ])}
     ${cards([
       { k: `${t.kind} per second`, v: num(t.rate), hint: unit, lead: true },

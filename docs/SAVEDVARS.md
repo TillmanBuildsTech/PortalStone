@@ -186,9 +186,22 @@ Everything else is reported as unknown, never as zero:
 | session still open / no logout since | `no flush since this session ended` |
 | tracking started after the session began | `no flush before this session began` |
 | one flush pair covers two sessions | the number, plus `shared across 2 sessions` |
+| play continued after the last combat event | a separate **after this session** table: the flushes no session covers |
 
 The third case is why the count exists: two evenings between the same login and logout cannot be
 split, so the page shows the delta and says it is shared instead of inventing an attribution.
+
+The fourth case matters because combat is not the only thing a player does. Banking, spending gold
+and turning in quests write nothing to the combat log, so a sitting that produced no combat
+produces no session — while SavedVariables still flush at logout and `/reload`. Those flushes are
+not folded into the session bracket (they can be minutes or hours later, or a different sitting);
+they are shown underneath it, bounded by the next session's start. That answers "where did my gold
+go" without claiming the spend happened mid-dungeon. A wildcard path such as `forever.*.money`
+also carries a `sum of N` hint, because the number is several characters' wallets added together,
+not one.
+
+A zero delta reads `no change`, not a dash: a dash in the change column means *unknown*, and the two
+must not look alike.
 
 ## Gold, end to end
 

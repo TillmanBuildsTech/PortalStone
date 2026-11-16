@@ -9,7 +9,7 @@
  * it (one per character, for `forever[*].money`), and stores the numbers.
  */
 import { isTable } from '../../core/src/savedvars/lua';
-import { collectEntries, collectValues } from '../../core/src/savedvars/shape';
+import { collectEntries, collectValues, hasEntity, pinEntity } from '../../core/src/savedvars/shape';
 import { listAddons, readAddon, type AddonFile } from './addons';
 import type { InstallInfo } from './discover';
 import type { Store, TrackedMetricRow, TrackedSampleRow } from './store';
@@ -51,10 +51,22 @@ function sampleMetric(store: Store, metric: TrackedMetricRow, files: AddonFile[]
   }
 
   // Stored paths include the global name; older ones may not.
-  const rel = segments[0] === metric.global_name ? segments.slice(1) : segments;
+  const stored = segments[0] === metric.global_name ? segments.slice(1) : segments;
   if (!isTable(global.value)) {
     return { metric, instances: 0, value: null, recorded: false, reason: `${metric.global_name} is not a table` };
   }
+  // Pinned to one entity: read that one, not the sum of them all. The instance count becomes 1,
+  // which is what lets a page say "this character's level" without hedging.
+  if (metric.entity && !hasEntity(global.value, stored, metric.entity)) {
+    return {
+      metric,
+      instances: 0,
+      value: null,
+      recorded: false,
+      reason: `"${metric.entity}" is not in this flush (renamed, deleted, or another account)`,
+    };
+  }
+  const rel = metric.entity ? pinEntity(stored, metric.entity) : stored;
   if (metric.kind === 'set') return sampleSet(store, metric, file, global.value, rel);
 
   const values = collectValues(global.value, rel)
@@ -262,6 +274,55 @@ export function changesAcrossSessions(
       changes.push({ metric, before, after, change, shared, setChange });
     }
     out.set(session.id, changes);
+  }
+  return out;
+}
+
+/**
+ * Flushes that happened after a session ended and before the next one began.
+ *
+ * The bracket above stops at the first flush after the session, which in the normal case is the
+ * logout flush. But a player keeps playing after the last combat event — banking, spending gold,
+ * turning in quests — and none of that writes to the combat log. No session is created for it, so
+ * those later flushes belong to no session at all. They are still real observations, so the session
+ * page shows them as "after this session", explicitly outside the bracket rather than folded into
+ * it: the alternative would be silence, and the user would read the session's unchanged level as
+ * wrong.
+ *
+ * `nextStartMs` bounds the search so a change made before the next session is not attributed to
+ * this one after the next one has already begun.
+ */
+export function changesAfterSession(
+  metrics: TrackedMetricRow[],
+  samplesByMetric: Map<number, TrackedSampleRow[]>,
+  session: SessionDetail,
+  nextStartMs: number | null,
+): SessionChange[] {
+  if (session.end_ms === null) return [];
+  const end = session.end_ms;
+  const out: SessionChange[] = [];
+  for (const metric of metrics) {
+    const samples = samplesByMetric.get(metric.id) ?? [];
+    // The bracket's "after" flush: the first observation once the session was over.
+    const before = samples.find((s) => s.ts_ms >= end) ?? null;
+    if (!before) continue;
+    const later = samples.filter(
+      (s) => s.ts_ms > before.ts_ms && (nextStartMs === null || s.ts_ms < nextStartMs),
+    );
+    const after = later[later.length - 1] ?? null;
+    if (!after) continue;
+    if (metric.kind === 'set') {
+      out.push({
+        metric,
+        before,
+        after,
+        change: null,
+        shared: 0,
+        setChange: diffMembers(parseMembers(before.members), parseMembers(after.members)),
+      });
+    } else {
+      out.push({ metric, before, after, change: after.value - before.value, shared: 0 });
+    }
   }
   return out;
 }

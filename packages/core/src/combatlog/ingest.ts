@@ -37,6 +37,8 @@ export interface IngestOptions {
    * session whose first segment has no zone is useless, so the caller supplies the last known one.
    */
   startZone?: { id: number | null; name: string };
+  /** Character in effect at startOffset: a resumed read never sees the events that identified them. */
+  startSelf?: { guid: string | null; name: string | null };
   sessionGapMs?: number;
   encounterGapMs?: number;
   /** stop after this many bytes (0 = whole file) */
@@ -53,6 +55,12 @@ export interface IngestOptions {
 export interface SessionSnapshot {
   startMs: number;
   endMs: number;
+  /**
+   * The character playing this session; null when the log never identified one. Optional on the
+   * type so a hand-built fixture can omit it, but the parser always fills both in.
+   */
+  selfGuid?: string | null;
+  selfName?: string | null;
   /** byte offset where this session began (the safe resume point for a growing log) */
   startByte: number;
   offsetMin: number;
@@ -186,6 +194,7 @@ export async function ingest(opts: IngestOptions): Promise<IngestResult> {
     ...(opts.encounterGapMs !== undefined ? { encounterGapMs: opts.encounterGapMs } : {}),
     ...(opts.selfGuids !== undefined ? { selfGuids: opts.selfGuids } : {}),
     ...(opts.startZone !== undefined ? { startZone: opts.startZone } : {}),
+    ...(opts.startSelf !== undefined ? { startSelf: opts.startSelf } : {}),
   });
 
   let layout: Layout | null = opts.layout ?? null;
@@ -377,6 +386,9 @@ function snapshotSession(s: SessionResult): SessionSnapshot {
   return {
     startMs: s.startMs,
     endMs: s.endMs,
+    // Per session, because one file can hold two characters' play.
+    selfGuid: s.selfGuid,
+    selfName: s.selfName,
     startByte: s.startByte,
     offsetMin: s.offsetMin,
     zoneId: s.zoneId,

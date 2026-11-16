@@ -6,6 +6,7 @@ import { Store } from '../src/store';
 import { clearAddonCache } from '../src/addons';
 import {
   changesAcrossSessions,
+  changesAfterSession,
   diffMembers,
   parseMembers,
   sampleTracked,
@@ -224,6 +225,7 @@ describe('session attribution', () => {
     label: 'Gold',
     unit: 'copper',
     kind: 'number',
+    entity: null,
     enabled: 1,
     created_ms: 0,
   };
@@ -298,6 +300,46 @@ describe('session attribution', () => {
     ).get(1)!;
     expect(changes.map((c) => c.metric.label)).toEqual(['Gold', 'Level']);
     expect(changes[1]!.change).toBe(1);
+  });
+
+  it('reports the flushes after a session that no later session covers', () => {
+    const after = changesAfterSession(
+      [metric],
+      new Map([[1, [sample(500, 100), sample(6000, 400), sample(7000, 300), sample(9000, 50)]]]),
+      session(1, 1000, 5000),
+      null,
+    );
+    expect(after).toHaveLength(1);
+    expect(after[0]!.before!.value).toBe(400);
+    expect(after[0]!.after!.value).toBe(50);
+    expect(after[0]!.change).toBe(-350);
+    expect(after[0]!.shared).toBe(0);
+  });
+
+  it('stops the after-session window at the next session', () => {
+    const samples = [sample(500, 100), sample(6000, 400), sample(7000, 300), sample(9000, 50)];
+    const after = changesAfterSession([metric], new Map([[1, samples]]), session(1, 1000, 5000), 8000);
+    expect(after[0]!.after!.value).toBe(300);
+    expect(after[0]!.change).toBe(-100);
+  });
+
+  it('says nothing when the session is still open or the flushes have not moved', () => {
+    expect(changesAfterSession([metric], new Map([[1, [sample(500, 1)]]]), session(1, 1000, null), null)).toEqual([]);
+    expect(
+      changesAfterSession([metric], new Map([[1, [sample(500, 1), sample(6000, 2)]]]), session(1, 1000, 5000), null),
+    ).toEqual([]);
+  });
+
+  it('diffs equipment across the after-session flushes too', () => {
+    const set = { ...metric, id: 2, label: 'Equipped', unit: 'plain', kind: 'set' };
+    const gear = (ts: number, v: string) => ({ ...sample(ts, 1), members: JSON.stringify([{ k: '16', v }]) });
+    const after = changesAfterSession(
+      [set],
+      new Map([[2, [gear(500, 'a'), gear(6000, 'a'), gear(9000, 'b')]]]),
+      session(1, 1000, 5000),
+      null,
+    );
+    expect(after[0]!.setChange!.changed).toEqual([{ k: '16', from: 'a', to: 'b' }]);
   });
 });
 
@@ -426,6 +468,7 @@ describe('tracking equipment', () => {
       label: 'Equipped',
       unit: 'plain',
       kind: 'set',
+      entity: null,
       enabled: 1,
       created_ms: 0,
     };
@@ -457,5 +500,137 @@ describe('tracking equipment', () => {
     expect(diff.changed).toEqual([{ k: '16', from: '5000', to: '6000' }]);
     expect(diff.added).toEqual([{ k: '17', v: '7000' }]);
     expect(changes[0]!.change).toBeNull(); // a set has no arithmetic delta
+  });
+});
+
+
+/**
+ * Per-character tracking: the same property about two characters is two series, and the one that is
+ * pinned reads that character's number rather than the sum of everybody's.
+ */
+describe('tracking one entity', () => {
+  function writeLevels(levels: { main: number; alt: number }, mtimeMs: number): InstallInfo[] {
+    const body = `BrotherBags = {
+["forever"] = {
+["Dead Sadfatkid"] = { ["level"] = ${levels.main} },
+["Slouch Mage"] = { ["level"] = ${levels.alt} },
+},
+}
+`;
+    const path = join(SV, 'BagBrother.lua');
+    writeFileSync(path, body);
+    utimesSync(path, new Date(mtimeMs), new Date(mtimeMs));
+    return [
+      {
+        root: DIR,
+        flavors: [
+          {
+            name: '_forever_',
+            dir: DIR,
+            logs: [],
+            addons: [],
+            accounts: [
+              {
+                name: 'ACC',
+                dir: DIR,
+                savedVariables: [{ name: 'BagBrother.lua', bytes: Buffer.byteLength(body), mtimeMs }],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+  }
+
+  const LEVEL = ['BrotherBags', 'forever', '*', 'level'];
+
+  it('reads the pinned character only, and keeps the two series apart', () => {
+    const installs = writeLevels({ main: 32, alt: 10 }, 1_700_000_000_000);
+    const sum = store.addTrackedMetric({
+      addonFile: 'BagBrother.lua',
+      globalName: 'BrotherBags',
+      path: LEVEL,
+      label: 'Level',
+      unit: 'plain',
+    });
+    const alt = store.addTrackedMetric({
+      addonFile: 'BagBrother.lua',
+      globalName: 'BrotherBags',
+      path: LEVEL,
+      label: 'Level · Slouch Mage',
+      unit: 'plain',
+      entity: 'Slouch Mage',
+    });
+    // same path, different entity: two series, not one row fighting over the path
+    expect(alt).not.toBe(sum);
+
+    const results = sampleTracked(store, installs);
+    const byId = new Map(results.map((r) => [r.metric.id, r]));
+    // the unpinned one is the sum and says how many values it added up
+    expect(byId.get(sum)).toMatchObject({ value: 42, instances: 2 });
+    // the pinned one is one character, so the number means a level
+    expect(byId.get(alt)).toMatchObject({ value: 10, instances: 1 });
+    expect(store.latestSample(alt)!.value).toBe(10);
+  });
+
+  it('records a new point per flush for the pinned series', () => {
+    const alt = store.addTrackedMetric({
+      addonFile: 'BagBrother.lua',
+      globalName: 'BrotherBags',
+      path: LEVEL,
+      label: 'Level · Slouch Mage',
+      unit: 'plain',
+      entity: 'Slouch Mage',
+    });
+    sampleTracked(store, writeLevels({ main: 32, alt: 10 }, 1_700_000_000_000));
+    sampleTracked(store, writeLevels({ main: 33, alt: 11 }, 1_700_000_100_000));
+    const samples = store.samples(alt, 10);
+    expect(samples.map((s) => s.value)).toEqual([10, 11]);
+  });
+
+  it('records nothing when the entity is gone, and says why', () => {
+    const alt = store.addTrackedMetric({
+      addonFile: 'BagBrother.lua',
+      globalName: 'BrotherBags',
+      path: LEVEL,
+      label: 'Level · Slouch Mage',
+      unit: 'plain',
+      entity: 'Slouch Mage',
+    });
+    sampleTracked(store, writeLevels({ main: 33, alt: 11 }, 1_700_000_200_000));
+
+    // The addon renames the character (or the account changed): the pinned key is simply absent.
+    // That is "unknown", never zero — a zero would draw a cliff that never happened.
+    const body = `BrotherBags = {
+["forever"] = {
+["Dead Sadfatkid"] = { ["level"] = 33 },
+["Slouch Magee"] = { ["level"] = 12 },
+},
+}
+`;
+    const mtimeMs = 1_700_000_300_000;
+    const path = join(SV, 'BagBrother.lua');
+    writeFileSync(path, body);
+    utimesSync(path, new Date(mtimeMs), new Date(mtimeMs));
+    const installs: InstallInfo[] = [
+      {
+        root: DIR,
+        flavors: [
+          {
+            name: '_forever_',
+            dir: DIR,
+            logs: [],
+            addons: [],
+            accounts: [{ name: 'ACC', dir: DIR, savedVariables: [{ name: 'BagBrother.lua', bytes: Buffer.byteLength(body), mtimeMs }] }],
+          },
+        ],
+      },
+    ];
+    const res = sampleTracked(store, installs)[0]!;
+    expect(res.recorded).toBe(false);
+    expect(res.value).toBeNull();
+    expect(res.reason).toContain('not in this flush');
+    // the earlier points are untouched
+    expect(store.samples(alt, 10).map((x) => x.value)).toEqual([11]);
   });
 });

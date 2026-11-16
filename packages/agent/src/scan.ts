@@ -52,10 +52,17 @@ export async function scan(
         // would begin with no zone at all ("unknown"). Seed it from the session being re-read; if
         // that is unknown too, re-read the file from the top once and recover it properly.
         let startZone: { id: number | null; name: string } | undefined;
+        // Same reasoning for identity: the resumed read starts after the events that named the
+        // player, so hand the previously stored character back in.
+        let startSelf: { guid: string | null; name: string | null } | undefined;
         if (offset > 0) {
           const zone = store.lastSessionZone(file.path);
           if (zone && zone.name && zone.name !== 'unknown') startZone = zone;
           else offset = 0;
+        }
+        if (offset > 0) {
+          const who = store.lastSessionCharacter(file.path);
+          if (who && who.name) startSelf = who;
         }
 
         const started = Date.now();
@@ -64,6 +71,7 @@ export async function scan(
           startOffset: offset,
           ...(layout ? { layout } : {}),
           ...(startZone ? { startZone } : {}),
+          ...(startSelf ? { startSelf } : {}),
         });
         const elapsed = Date.now() - started;
 
@@ -91,14 +99,14 @@ export async function scan(
           continue;
         }
 
-        const character = { guid: res.selfGuid, name: res.selfName };
         if (res.sessions.length > 0) {
           // Rewrite from the first session we just read; with offset 0 that is the whole file.
+          // Each snapshot carries its own character, so a file spanning two toons stays honest.
           const fromMs = offset === 0 ? 0 : res.sessions[0]!.startMs;
-          store.replaceSessionsFrom(file.path, fromMs, res.sessions, character);
+          store.replaceSessionsFrom(file.path, fromMs, res.sessions);
         } else if (offset === 0) {
           // a rotated file with no combat in it: drop anything stored for this path
-          store.replaceSessionsFrom(file.path, 0, [], character);
+          store.replaceSessionsFrom(file.path, 0, []);
         }
         // Bag drops are rebuilt per file: a drop only means anything next to the log it came from.
         store.replaceBagDrops(file.path, res.bagDrops);
