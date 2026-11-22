@@ -8,6 +8,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { InstallInfo } from './discover';
 import type { Store } from './store';
@@ -72,26 +74,35 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 }
 
 const require = createRequire(import.meta.url);
+const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 /**
- * Static files served by the app: the vendored grid library and the dashboard builder. Resolved
- * from node_modules at startup, so there is still no build step and no CDN.
+ * Static files served by the app: the vendored grid library and the dashboard builder.
+ *
+ * A release build (`npm run build`) ships them in `assets/` beside the bundle, where there is no
+ * node_modules to resolve against; a dev run (tsx, straight from src) has no such folder and reads
+ * them from `ui/assets` and node_modules instead. Whichever exists first wins, resolved once here.
  */
+function shippedAsset(name: string): string | null {
+  const beside = join(HERE, 'assets', name);
+  return existsSync(beside) ? beside : null;
+}
+
 const ASSETS: Record<string, { file: string; type: string }> = {
   '/vendor/gridstack/gridstack-all.js': {
-    file: require.resolve('gridstack/dist/gridstack-all.js'),
+    file: shippedAsset('gridstack-all.js') ?? require.resolve('gridstack/dist/gridstack-all.js'),
     type: 'text/javascript; charset=utf-8',
   },
   '/vendor/gridstack/gridstack.min.css': {
-    file: require.resolve('gridstack/dist/gridstack.min.css'),
+    file: shippedAsset('gridstack.min.css') ?? require.resolve('gridstack/dist/gridstack.min.css'),
     type: 'text/css; charset=utf-8',
   },
   '/assets/dashboard.js': {
-    file: fileURLToPath(new URL('./ui/assets/dashboard.js', import.meta.url)),
+    file: shippedAsset('dashboard.js') ?? fileURLToPath(new URL('./ui/assets/dashboard.js', import.meta.url)),
     type: 'text/javascript; charset=utf-8',
   },
   '/assets/dashboard.css': {
-    file: fileURLToPath(new URL('./ui/assets/dashboard.css', import.meta.url)),
+    file: shippedAsset('dashboard.css') ?? fileURLToPath(new URL('./ui/assets/dashboard.css', import.meta.url)),
     type: 'text/css; charset=utf-8',
   },
 };
