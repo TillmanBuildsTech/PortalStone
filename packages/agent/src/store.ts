@@ -489,6 +489,17 @@ export interface Totals {
   lastMs: number | null;
 }
 
+/**
+ * Which account a SavedVariables path belongs to: `_forever_/LANC3RR1` for
+ * `…/_forever_/WTF/Account/LANC3RR1/SavedVariables/BagBrother.lua`. Keyed by flavor and account
+ * rather than the whole path, so the same account under a moved install is still one account.
+ */
+export function accountOf(sourceFile: string | null): string {
+  if (!sourceFile) return '';
+  const m = /[\\/]([^\\/]+)[\\/]WTF[\\/]Account[\\/]([^\\/]+)[\\/]SavedVariables[\\/]/i.exec(sourceFile);
+  return m ? `${m[1]}/${m[2]}` : dirname(sourceFile);
+}
+
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
@@ -587,6 +598,79 @@ export class Store {
     this.db.exec('DROP TABLE IF EXISTS camp_attendee');
     this.db.exec('DROP TABLE IF EXISTS camp_bag');
     this.db.exec('DROP TABLE IF EXISTS camp');
+    if (this.meta('samples_cross_account') === null) {
+      this.mergeAccountSamples();
+      this.setMeta('samples_cross_account', '1');
+    }
+  }
+
+  /**
+   * One-time repair of summed series recorded before sampling read every account.
+   *
+   * Each old sample was one account's total — whichever account had flushed last — so playing alts
+   * on two accounts drew a sawtooth between their totals. Every sample still names its source file,
+   * which names its account, so the true series is recoverable: at each flush, the total is that
+   * account's new value plus every other account's last known one. The original rows are copied to
+   * `tracked_sample_premerge` first, so nothing is lost.
+   */
+  private mergeAccountSamples(): void {
+    const metrics = this.db
+      .prepare("SELECT id FROM tracked_metric WHERE kind = 'number' AND entity IS NULL")
+      .all() as { id: number }[];
+    this.db.exec('BEGIN');
+    try {
+      for (const { id } of metrics) {
+        const rows = this.db
+          .prepare(
+            `SELECT rowid, ts_ms, value, instances, min_value, max_value, source_file
+               FROM tracked_sample WHERE metric_id = ? ORDER BY ts_ms, rowid`,
+          )
+          .all(id) as {
+          rowid: number;
+          ts_ms: number;
+          value: number;
+          instances: number;
+          min_value: number | null;
+          max_value: number | null;
+          source_file: string | null;
+        }[];
+        const accounts = new Set(rows.map((r) => accountOf(r.source_file)));
+        if (accounts.size < 2) continue;
+
+        this.db.exec('CREATE TABLE IF NOT EXISTS tracked_sample_premerge AS SELECT * FROM tracked_sample WHERE 0');
+        this.db.prepare('INSERT INTO tracked_sample_premerge SELECT * FROM tracked_sample WHERE metric_id = ?').run(id);
+
+        // Before an account's first observation, its first observed value stands in for it. That is
+        // exact for an account created mid-history (it starts at 0, as a fresh one does) and the best
+        // available estimate otherwise; dropping those points instead would erase all the history
+        // from before the second account existed.
+        const latest = new Map<string, (typeof rows)[number]>();
+        for (const row of rows) {
+          const key = accountOf(row.source_file);
+          if (!latest.has(key)) latest.set(key, row);
+        }
+        const update = this.db.prepare(
+          'UPDATE tracked_sample SET value = ?, instances = ?, min_value = ?, max_value = ? WHERE rowid = ?',
+        );
+        for (const row of rows) {
+          latest.set(accountOf(row.source_file), row);
+          const parts = [...latest.values()];
+          const mins = parts.map((p) => p.min_value ?? p.value);
+          const maxes = parts.map((p) => p.max_value ?? p.value);
+          update.run(
+            parts.reduce((a, p) => a + p.value, 0),
+            parts.reduce((a, p) => a + p.instances, 0),
+            Math.min(...mins),
+            Math.max(...maxes),
+            row.rowid,
+          );
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   close(): void {

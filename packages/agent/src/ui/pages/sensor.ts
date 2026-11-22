@@ -39,7 +39,11 @@ export function renderSensor(ctx: Ctx): string {
     <h1>Sensor</h1>
     ${metas([
       esc(SENSOR_FILE),
-      read.file ? `flushed ${when(read.file.mtimeMs, 0)}` : null,
+      read.files.length > 1
+        ? `${num(read.files.length)} accounts · last flush ${when(read.files[0]!.mtimeMs, 0)}`
+        : read.file
+          ? `flushed ${when(read.file.mtimeMs, 0)}`
+          : null,
       `${num(read.chars.length)} character${read.chars.length === 1 ? '' : 's'}`,
       ctx.character ? `scoped to ${esc(ctx.character)}` : null,
     ])}`;
@@ -63,8 +67,11 @@ export function renderSensor(ctx: Ctx): string {
     });
   }
 
+  // Account labels only earn their space when there is more than one account to tell apart.
+  const showAccount = read.files.length > 1;
   const body = `${head}
-    ${chars.map((c) => characterSection(c)).join('\n')}
+    ${read.skipped.length > 0 ? `<div class="sub">not shown: ${read.skipped.map(esc).join('<br>')}</div>` : ''}
+    ${chars.map((c) => characterSection(c, showAccount)).join('\n')}
     ${section(
       'what this buys the rest of the app',
       `<div class="sub">Spec chips on sessions and runs are inferred from abilities, because the combat
@@ -75,14 +82,15 @@ export function renderSensor(ctx: Ctx): string {
   return page('Sensor', body, { active: 'sensor', ctx });
 }
 
-function characterSection(c: SensorCharacter): string {
+function characterSection(c: SensorCharacter, showAccount: boolean): string {
   const spec = c.spec;
   const specLabel = spec?.name
     ? `${spec.name}${spec.build ? ` <span class="sub">${esc(spec.build)}</span>` : ''}`
     : '<span class="sub">not recorded</span>';
 
   const top = section(
-    `${esc(c.key)}${c.meta.realm ? `<span class="sub"> ${esc(c.meta.realm)}</span>` : ''}`,
+    // section() escapes its title, so this is plain text: markup here would print as tags.
+    [c.key, c.meta.realm, showAccount ? `account ${c.account}` : null].filter(Boolean).join(' · '),
     `<div class="cards">
       ${card('level', c.meta.level === null ? '—' : num(c.meta.level), [c.meta.race, c.meta.class].filter(Boolean).join(' ') || undefined)}
       ${card('spec', specLabel, spec?.role ? spec.role.toLowerCase() : spec?.points ? `${spec.points} points` : undefined)}

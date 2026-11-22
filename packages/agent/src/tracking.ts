@@ -31,48 +31,104 @@ export function sampleTracked(store: Store, installs: InstallInfo[]): SampleResu
   return metrics.map((metric) => sampleMetric(store, metric, files));
 }
 
+/** One account's copy of the addon file, parsed down to the tracked global. */
+interface AccountGlobal {
+  file: AddonFile;
+  value: LuaTableLike;
+}
+
 function sampleMetric(store: Store, metric: TrackedMetricRow, files: AddonFile[]): SampleResult {
   const segments = parsePath(metric.path);
   const candidates = files.filter((f) => f.file === metric.addon_file);
   if (candidates.length === 0) {
     return { metric, instances: 0, value: null, recorded: false, reason: `${metric.addon_file} is not installed any more` };
   }
-  // Several accounts can each have the same addon file. Follow the one that flushed last rather
-  // than averaging two characters' wallets into one meaningless number.
-  const file = candidates.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
-  const read = readAddon(file);
-  if (read.state !== 'ok') {
-    return { metric, instances: 0, value: null, recorded: false, reason: `${metric.addon_file} is ${read.state}` };
-  }
 
-  const global = read.globals.find((g) => g.name === metric.global_name);
-  if (!global) {
+  // Every account keeps its own copy of the file, and each copy only knows that account's
+  // characters. Reading just the newest copy made a summed series flip between one account's total
+  // and the other's whenever you switched alts — a change that never happened — so every copy is
+  // read. One that cannot be parsed stops the sample: a total missing an account is a fake dip.
+  const globals: AccountGlobal[] = [];
+  for (const file of candidates) {
+    const read = readAddon(file);
+    if (read.state === 'empty') continue;
+    if (read.state !== 'ok') {
+      return {
+        metric,
+        instances: 0,
+        value: null,
+        recorded: false,
+        reason: `${metric.addon_file} is ${read.state} on account ${file.account}`,
+      };
+    }
+    const global = read.globals.find((g) => g.name === metric.global_name);
+    if (global && isTable(global.value)) globals.push({ file, value: global.value });
+  }
+  if (globals.length === 0) {
     return { metric, instances: 0, value: null, recorded: false, reason: `global ${metric.global_name} is gone` };
   }
 
   // Stored paths include the global name; older ones may not.
   const stored = segments[0] === metric.global_name ? segments.slice(1) : segments;
-  if (!isTable(global.value)) {
-    return { metric, instances: 0, value: null, recorded: false, reason: `${metric.global_name} is not a table` };
-  }
-  // Pinned to one entity: read that one, not the sum of them all. The instance count becomes 1,
-  // which is what lets a page say "this character's level" without hedging.
-  if (metric.entity && !hasEntity(global.value, stored, metric.entity)) {
-    return {
-      metric,
-      instances: 0,
-      value: null,
-      recorded: false,
-      reason: `"${metric.entity}" is not in this flush (renamed, deleted, or another account)`,
-    };
-  }
-  const rel = metric.entity ? pinEntity(stored, metric.entity) : stored;
-  if (metric.kind === 'set') return sampleSet(store, metric, file, global.value, rel);
 
-  const values = collectValues(global.value, rel)
+  // Pinned to one entity: read that one, not the sum of them all. The instance count becomes 1,
+  // which is what lets a page say "this character's level" without hedging. The character lives in
+  // one account's file, so follow that file — not whichever account happened to flush last.
+  if (metric.entity) {
+    const holders = globals.filter((g) => hasEntity(g.value, stored, metric.entity!));
+    if (holders.length === 0) {
+      return {
+        metric,
+        instances: 0,
+        value: null,
+        recorded: false,
+        reason: `"${metric.entity}" is not in this flush on any account (renamed or deleted)`,
+      };
+    }
+    // Two accounts holding the same name are two characters; the newest flush is the best guess.
+    const holder = holders.reduce((a, b) => (b.file.mtimeMs > a.file.mtimeMs ? b : a));
+    const rel = pinEntity(stored, metric.entity);
+    if (metric.kind === 'set') return sampleSet(store, metric, holder.file, holder.value, rel);
+    return sampleNumber(store, metric, [{ ...holder, values: numbersAt(holder.value, rel) }]);
+  }
+
+  // Sets are members keyed by slot or name, and two accounts' keys would collide, so an unpinned
+  // set follows the newest copy that actually has it rather than merging.
+  if (metric.kind === 'set') {
+    const holders = globals.filter((g) => collectEntries(g.value, stored).length > 0);
+    const holder = (holders.length > 0 ? holders : globals).reduce((a, b) => (b.file.mtimeMs > a.file.mtimeMs ? b : a));
+    return sampleSet(store, metric, holder.file, holder.value, stored);
+  }
+
+  return sampleNumber(
+    store,
+    metric,
+    globals.map((g) => ({ ...g, values: numbersAt(g.value, stored) })),
+  );
+}
+
+function numbersAt(value: LuaTableLike, rel: string[]): number[] {
+  return collectValues(value, rel)
     .map(toNumber)
     .filter((v): v is number => v !== null);
-  if (values.length === 0) {
+}
+
+/**
+ * Sum one number across every account that has it, stamped with the newest of those flushes.
+ *
+ * Each account's part is its file as it stands now, which is that account's last flush: the total
+ * is "everything every account had when it last logged out", and it only moves when one of them
+ * actually changes. An account whose copy lacks the property (a character-specific path) adds
+ * nothing and, importantly, does not move the timestamp.
+ */
+function sampleNumber(
+  store: Store,
+  metric: TrackedMetricRow,
+  parts: (AccountGlobal & { values: number[] })[],
+): SampleResult {
+  const contributing = parts.filter((p) => p.values.length > 0);
+  const values = contributing.flatMap((p) => p.values);
+  if (contributing.length === 0) {
     return {
       metric,
       instances: 0,
@@ -81,18 +137,18 @@ function sampleMetric(store: Store, metric: TrackedMetricRow, files: AddonFile[]
       reason: 'the property is not in this flush (the addon has not written it yet)',
     };
   }
-
+  const newest = contributing.reduce((a, b) => (b.file.mtimeMs > a.file.mtimeMs ? b : a)).file;
   const value = values.reduce((a, b) => a + b, 0);
   const recorded = store.recordSample({
     metricId: metric.id,
     // The flush time, not the scan time: the game decides when the data was observed.
-    tsMs: file.mtimeMs,
+    tsMs: newest.mtimeMs,
     value,
     instances: values.length,
     minValue: Math.min(...values),
     maxValue: Math.max(...values),
-    sourceFile: file.path,
-    sourceMtimeMs: file.mtimeMs,
+    sourceFile: newest.path,
+    sourceMtimeMs: newest.mtimeMs,
   });
   return { metric, instances: values.length, value, recorded, ...(recorded ? {} : { reason: 'already stored for this flush' }) };
 }
