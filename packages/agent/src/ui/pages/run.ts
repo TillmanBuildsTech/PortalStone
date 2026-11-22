@@ -35,7 +35,7 @@ export function renderRun(ctx: Ctx, id: number): string | null {
   // the whole point: an alt leveling through the same zone would otherwise become the median the
   // main is measured against, which is a comparison between two different characters.
   const others = store
-    .runsForZone(seg.zone_name, 200, seg.character_name)
+    .runsForZone(seg.zone_name, 200, seg.character_guid ?? seg.character_name)
     .filter((r) => r.id !== seg.id)
     .map((r) => throughputFrom(r));
   const comparable = others.filter((o) => o.kind === t.kind && o.rate > 0 && o.total > 0);

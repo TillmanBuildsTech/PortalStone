@@ -15,7 +15,7 @@ import type { InstallInfo } from './discover';
 import type { Store } from './store';
 import { page } from './ui/shell';
 import { esc } from './ui/format';
-import type { Ctx, LastScan } from './ui/context';
+import { resolveScope, type Ctx, type LastScan } from './ui/context';
 import { renderHome } from './ui/pages/home';
 import { renderSession } from './ui/pages/session';
 import { renderRun } from './ui/pages/run';
@@ -127,29 +127,51 @@ function notFound(msg: string): string {
 }
 
 /**
- * `?char=` resolved against the roster.
+ * Why a request must not be served, or null when it may.
  *
- * An unknown name is not an error page: it is a stale link, and showing every character is the
- * honest answer to "show me someone who is not in this database". The value is used in SQL as a
- * bound parameter everywhere, so a hostile query string cannot do more than fail to match.
+ * Listening on 127.0.0.1 keeps other machines out, not other websites. Any page open in your browser
+ * can send requests here, so two checks close what binding alone leaves open:
+ *
+ *  - Host must name this server. DNS rebinding points an attacker's hostname at 127.0.0.1, after
+ *    which their page can read these pages as same-origin; its requests still carry their Host.
+ *  - A write must come from these pages. A plain HTML form on any site can POST here (delete a
+ *    dashboard, stop tracking), and the browser marks it with that site's Origin, or with
+ *    Sec-Fetch-Site when it withholds the Origin. A request with neither is not from a browser
+ *    page (curl, the install script), so it passes.
  */
-function resolveCharacter(store: Store, url: URL): string | null {
-  const raw = url.searchParams.get('char');
-  if (!raw) return null;
-  return store.characters().some((c) => c.name === raw) ? raw : null;
+export function refuseRequest(
+  req: Pick<IncomingMessage, 'method' | 'headers'>,
+  port: number,
+): string | null {
+  const own = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
+  const host = (req.headers.host ?? '').toLowerCase();
+  if (!own.has(host)) return `unexpected Host "${host}"`;
+  const method = (req.method ?? 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return null;
+  const origin = req.headers.origin;
+  if (origin !== undefined) {
+    return [...own].some((h) => origin.toLowerCase() === `http://${h}`) ? null : `cross-origin ${method} from ${origin}`;
+  }
+  const site = req.headers['sec-fetch-site'];
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') return `cross-site ${method}`;
+  return null;
 }
 
 export function startServer(store: Store, installs: InstallInfo[], opts: ServerOptions): Server {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const refused = refuseRequest(req, opts.port);
+    if (refused) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(`Forbidden: ${refused}\n`);
+      return;
+    }
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${opts.port}`);
-    const character = resolveCharacter(store, url);
     const ctx: Ctx = {
       store,
       installs,
       lastScan: opts.lastScan(),
       dbPath: opts.dbPath,
-      character,
-      charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+      ...resolveScope(store, url.searchParams.get('char')),
     };
     const redirect = (location: string): void => {
       res.writeHead(303, { location, 'cache-control': 'no-store' });
@@ -213,7 +235,7 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
                 damage: store.segmentAbilities(id, 'damage'),
                 healing: store.segmentAbilities(id, 'healing'),
                 taken: store.segmentAbilities(id, 'taken'),
-                history: store.runsForZone(run.zone_name, 50, run.character_name).filter((r) => r.id !== id),
+                history: store.runsForZone(run.zone_name, 50, run.character_guid ?? run.character_name).filter((r) => r.id !== id),
               },
               null,
               2,
@@ -853,4 +875,33 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
   });
   server.listen(opts.port, '127.0.0.1');
   return server;
+}
+
+/**
+ * Resolves once the server is listening; rejects with a readable reason when it cannot.
+ *
+ * The usual failure is another Portalstone already on the port (the service, while a dev run
+ * starts). Knowing that before the first scan matters: a second agent that scans first writes the
+ * same rows as the first, and only then discovers it has nowhere to serve them.
+ */
+export function listening(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException): void => {
+      server.off('listening', onListening);
+      reject(
+        err.code === 'EADDRINUSE'
+          ? new Error(
+              `port ${port} is already in use — another Portalstone (the service?) is probably running. ` +
+                'Stop it (serv stop portalstone) or pass --port.',
+            )
+          : err,
+      );
+    };
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+  });
 }

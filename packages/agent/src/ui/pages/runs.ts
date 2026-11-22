@@ -5,7 +5,7 @@
  * flat list of runs, and every row opens that run's own performance page.
  */
 import { cards, characterBar, kindPill, metas, page, section, table, withCharacter } from '../shell';
-import { dur, num, when } from '../format';
+import { dur, esc, num, when } from '../format';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
 import type { SegmentRow } from '../../store';
@@ -24,7 +24,7 @@ export function renderRuns(ctx: Ctx): string {
     const t = throughputFrom(r);
     const off = ctx.store.session(r.session_id)?.offset_min ?? 0;
     const who = showCharacter
-      ? `<td class="l"><a href="${withCharacter('/runs', r.character_name)}">${r.character_name || '—'}</a></td>`
+      ? `<td class="l"><a href="${withCharacter('/runs', r.character_guid ?? r.character_name)}">${esc(r.character_name || '—')}</a></td>`
       : '';
     return `<tr>
       <td class="l"><a href="/run?id=${r.id}">${r.zone_name}</a>${kindPill(r.kind)}</td>${who}
@@ -49,7 +49,7 @@ export function renderRuns(ctx: Ctx): string {
   });
 
   const body = `
-    <h1>Runs${character ? ` · ${character}` : ''}</h1>
+    <h1>Runs${character ? ` · ${esc(ctx.characterName ?? character)}` : ''}</h1>
     ${metas([
       `${num(runs.length)} zone visit${runs.length === 1 ? '' : 's'}`,
       `${num(byKind.instance)} in instances`,

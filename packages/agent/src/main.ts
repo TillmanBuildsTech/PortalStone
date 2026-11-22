@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { discover, type InstallInfo } from './discover';
 import { scan } from './scan';
-import { startServer } from './server';
+import { listening, startServer } from './server';
 import { Store } from './store';
 import { parseMembers, sampleTracked } from './tracking';
 import { itemIdsIn, refreshItemNames } from './items';
@@ -125,16 +125,28 @@ async function main(): Promise<void> {
     }
   };
 
+  // Claim the port before scanning: a second agent should stop here, not after writing a full scan
+  // into the database the first one is using.
+  const server = once ? null : startServer(store, installs, { port, dbPath, installs, lastScan: () => last });
+  if (server) {
+    try {
+      await listening(server, port);
+    } catch (err) {
+      console.error(`portalstone: ${(err as Error).message}`);
+      store.close();
+      process.exit(1);
+    }
+  }
+
   await runScan();
   // Only record the new schema once every log re-read cleanly: a log that failed must get the
   // full-rebuild path again next start rather than leave a hole in the detail.
   if (backfill && last.errors === 0) store.markDetailSchema();
-  if (once) {
+  if (!server) {
     store.close();
     return;
   }
 
-  const server = startServer(store, installs, { port, dbPath, installs, lastScan: () => last });
   const url = `http://127.0.0.1:${port}/`;
   console.log(`\nInterface: ${url}`);
   console.log(`Database:  ${dbPath}`);

@@ -34,7 +34,7 @@ export function renderPvp(ctx: Ctx): string {
   if (summary.kills + summary.deaths === 0) {
     return page(
       'PvP',
-      `<h1>PvP${character ? ` · ${character}` : ''}</h1>
+      `<h1>PvP${character ? ` · ${esc(ctx.characterName ?? character)}` : ''}</h1>
        ${metas(['nothing recorded'])}
        ${characterBar(ctx, '/pvp')}
        ${emptyState(
@@ -48,7 +48,7 @@ export function renderPvp(ctx: Ctx): string {
   }
 
   const body = `
-    <h1>PvP${character ? ` · ${character}` : ''}</h1>
+    <h1>PvP${character ? ` · ${esc(ctx.characterName ?? character)}` : ''}</h1>
     ${metas([
       `${num(summary.kills)} player kill${summary.kills === 1 ? '' : 's'}`,
       `${num(summary.deaths)} death${summary.deaths === 1 ? '' : 's'} to players`,

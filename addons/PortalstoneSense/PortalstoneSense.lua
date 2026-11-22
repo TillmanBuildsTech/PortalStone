@@ -27,7 +27,7 @@ Commands: /psense (print the snapshot), /psense write (force one now).
 --]]--------------------------------------------------------------------------
 
 local ADDON = "PortalstoneSense"
-local SCHEMA = 1
+local SCHEMA = 2
 local HISTORY_MAX = 40
 
 PortalstoneDB = PortalstoneDB or {}
@@ -297,11 +297,37 @@ end
 
 -- ------------------------------------------------------------------- write ---
 
+-- The key a character is stored under: name and realm. Schema 1 used the name
+-- alone, so two characters with one name on two realms of the same account
+-- wrote over each other's history. A client with no realm API keeps the name.
+local function charKey()
+  local name = UnitName("player")
+  if not name then return nil end
+  local realm = safe(GetRealmName)
+  if type(realm) == "string" and realm ~= "" then return name .. "-" .. realm end
+  return name
+end
+
+-- Move this character's schema-1 entry to its schema-2 key, once. Only the
+-- character logged in can be moved: it is the only one whose realm is known
+-- for certain, so an entry recorded on another realm is left where it is.
+local function adoptLegacy(id, key)
+  if key == id.name or DB.chars[key] ~= nil then return end
+  local old = DB.chars[id.name]
+  if type(old) ~= "table" then return end
+  local realm = type(old.meta) == "table" and old.meta.realm or nil
+  if realm ~= nil and realm ~= id.realm then return end
+  DB.chars[key] = old
+  DB.chars[id.name] = nil
+end
+
 local function snapshot(reason)
   local id = identity()
   if not id or not id.name then return end
-  local char = DB.chars[id.name]
-  if type(char) ~= "table" then char = {}; DB.chars[id.name] = char end
+  local key = charKey() or id.name
+  adoptLegacy(id, key)
+  local char = DB.chars[key]
+  if type(char) ~= "table" then char = {}; DB.chars[key] = char end
 
   char.meta = id
   char.meta.updated = time()
@@ -358,7 +384,7 @@ frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED") -- retail; harmless elsewhere
 frame:RegisterEvent("TIME_PLAYED_MSG")
 
-frame:SetScript("OnEvent", function(_, event, arg1)
+frame:SetScript("OnEvent", function(_, event, arg1, arg2)
   if event == "ADDON_LOADED" then
     if arg1 ~= ADDON then return end
     DB.schema = SCHEMA
@@ -367,8 +393,8 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     return
   end
   if event == "TIME_PLAYED_MSG" then
-    local name = UnitName("player")
-    local char = name and DB.chars[name]
+    local key = charKey()
+    local char = key and DB.chars[key]
     if char and arg1 then
       char.played = { total = arg1, level = arg2 }
     end
@@ -425,7 +451,7 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
     end
     return
   end
-  local char = DB.chars[UnitName("player") or ""]
+  local char = DB.chars[charKey() or ""]
   if not char or not DEFAULT_CHAT_FRAME then return end
   local spec = char.spec or {}
   DEFAULT_CHAT_FRAME:AddMessage(

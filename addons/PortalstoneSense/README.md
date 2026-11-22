@@ -58,11 +58,11 @@ this explicit command does.
 
 ```
 PortalstoneDB = {
-  schema = 1,
+  schema = 2,
   updated = <epoch>,
   chars = {
-    ["Dead Sadfatkid"] = {
-      schema = 1,
+    ["Dead-CAMWOW US2 Realm 8 PvP"] = {
+      schema = 2,
       meta  = { name, realm, guid, class, race, faction, guild, level, zone, updated },
       spec  = { name, build = "0/31/20", points, tab, role, group, groups, id, updated,
                 tabs = { { name, points }, ... } },
@@ -80,9 +80,15 @@ PortalstoneDB = {
 }
 ```
 
-Character keys are display names without realm (`Dead Sadfatkid`), the same key BagBrother and
-Attune use, so `sameCharacter()` joins them to a combat-log name (`Dead-Sadfatkid-PvP-US`) without
-either side being rewritten.
+Character keys are `UnitName("player")` and `GetRealmName()` joined by a hyphen. Schema 1 used the
+name alone, so two characters with one name on two realms of the same account overwrote each
+other; on login the addon moves the current character's schema-1 entry to its new key, and the app
+moves that character's tracked series along with it.
+
+The key is storage, not identity. Names disagree between sources on this server: for the same
+character the log writes `Dead-Sadfatkid-PvP-US`, BagBrother `Dead Sadfatkid`, and `UnitName` just
+`Dead`. The app joins sensor data to the log by `meta.guid`, which both record; `sameCharacter()`'s
+name heuristic is only the fallback for addons that keep no guid.
 
 ## Pairs with the inference
 

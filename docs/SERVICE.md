@@ -79,8 +79,10 @@ The service log is the app's own stdout/stderr, line-buffered by serv:
 
 ## Things worth knowing
 
-- Stop the service before running `npm run mvp`: both want port 48120, and the second one to start
-  loses. Same database is fine (SQLite WAL), same port is not.
+- Stop the service before running `npm run mvp`: both want port 48120. The second one to start
+  checks the port before it scans and exits with a message saying so. Sharing the database is fine:
+  a write that meets the other process's lock waits up to 5s for it, so `--once` beside the
+  service works.
 - A rebuild of the working tree is not live in the installed copy. `npm run build` then
   `npm run service:install` again to push a change into the service.
 - `node.exe` is referenced by absolute path from `process.execPath` at install time. A Node upgrade

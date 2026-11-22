@@ -9,7 +9,7 @@
 import { dur, esc, num, quantity, when } from '../format';
 import { emptyState, metas, page, section, table } from '../shell';
 import type { Ctx } from '../context';
-import { sameCharacter } from '../../characters';
+import { isCharacter } from '../../characters';
 import { readSensor, SENSOR_FILE, type SensorCharacter } from '../../sensor';
 
 export function renderSensor(ctx: Ctx): string {
@@ -32,7 +32,10 @@ export function renderSensor(ctx: Ctx): string {
     );
   }
 
-  const chars = read.chars.filter((c) => (ctx.character ? sameCharacter(c.key, ctx.character) : true));
+  const scope = { name: ctx.characterName, guid: ctx.characterGuid };
+  const chars = read.chars.filter((c) =>
+    ctx.character ? isCharacter(scope, { name: c.meta.name, guid: c.meta.guid }) : true,
+  );
 
   const head = `
     <div class="crumbs"><a href="/">sessions</a> <span>/</span> <span>sensor</span></div>
@@ -45,7 +48,7 @@ export function renderSensor(ctx: Ctx): string {
           ? `flushed ${when(read.file.mtimeMs, 0)}`
           : null,
       `${num(read.chars.length)} character${read.chars.length === 1 ? '' : 's'}`,
-      ctx.character ? `scoped to ${esc(ctx.character)}` : null,
+      ctx.characterName ? `scoped to ${esc(ctx.characterName)}` : null,
     ])}`;
 
   if (read.state !== 'ok') {
@@ -90,7 +93,7 @@ function characterSection(c: SensorCharacter, showAccount: boolean): string {
 
   const top = section(
     // section() escapes its title, so this is plain text: markup here would print as tags.
-    [c.key, c.meta.realm, showAccount ? `account ${c.account}` : null].filter(Boolean).join(' · '),
+    [c.meta.name, c.meta.realm, showAccount ? `account ${c.account}` : null].filter(Boolean).join(' · '),
     `<div class="cards">
       ${card('level', c.meta.level === null ? '—' : num(c.meta.level), [c.meta.race, c.meta.class].filter(Boolean).join(' ') || undefined)}
       ${card('spec', specLabel, spec?.role ? spec.role.toLowerCase() : spec?.points ? `${spec.points} points` : undefined)}

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store';
 import { renderSession } from '../src/ui/pages/session';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 
@@ -77,8 +77,7 @@ function ctxFor(s: Store, character: string | null = null): Ctx {
     installs: [],
     lastScan: { at: 0, entries: 0, errors: 0 },
     dbPath: ':memory:',
-    character,
-    charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+    ...resolveScope(s, character),
   };
 }
 

@@ -24,7 +24,7 @@ import {
   renderEditCard,
   renderPreview,
 } from '../src/ui/pages/dashboard';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 
@@ -140,8 +140,7 @@ function ctxFor(s: Store, character: string | null = null): Ctx {
     installs: [],
     lastScan: { at: 0, entries: 0, errors: 0 },
     dbPath: ':memory:',
-    character,
-    charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+    ...resolveScope(s, character),
   };
 }
 

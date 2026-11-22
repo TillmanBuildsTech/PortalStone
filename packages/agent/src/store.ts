@@ -345,6 +345,7 @@ export interface SessionRow {
   players_died: number;
   casts: number;
   interrupts: number;
+  character_guid: string | null;
   character_name: string | null;
   zones: string | null;
   encounters: number;
@@ -353,6 +354,8 @@ export interface SessionRow {
 
 /** One character, with what every session of theirs added up to. */
 export interface CharacterRow {
+  /** what `?char=` carries and every scoped query filters on: see whoIs */
+  key: string;
   name: string;
   guid: string | null;
   sessions: number;
@@ -490,6 +493,17 @@ export interface Totals {
 }
 
 /**
+ * A character's identity in SQL: the guid, or the name when the log never revealed a guid.
+ *
+ * Not the name alone. The log writes `Dead-Sadfatkid-PvP-US` with no realm in it, so two
+ * characters with one name on two realms are one name and two guids; grouping by name merged their
+ * sessions. The guid also carries the realm (`Player-6934-…`), so it is the one key that is unique.
+ */
+export function whoIs(alias = ''): string {
+  return `COALESCE(${alias}character_guid, ${alias}character_name)`;
+}
+
+/**
  * Which account a SavedVariables path belongs to: `_forever_/LANC3RR1` for
  * `…/_forever_/WTF/Account/LANC3RR1/SavedVariables/BagBrother.lua`. Keyed by flavor and account
  * rather than the whole path, so the same account under a moved install is still one account.
@@ -507,7 +521,10 @@ export class Store {
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.path = path;
-    this.db = new DatabaseSync(path);
+    // Two processes can hold this file: the service, and `npm run mvp` or `--once` beside it. A
+    // write that meets the other's lock waits for it instead of failing at once with "database is
+    // locked" — every write here is one short transaction, so a few seconds is generous.
+    this.db = new DatabaseSync(path, { timeout: 5000 });
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
@@ -970,7 +987,7 @@ export class Store {
   }
 
   listSessions(limit = 60, character: string | null = null): SessionRow[] {
-    const where = character ? 'WHERE s.character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs('s.')} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(
@@ -993,7 +1010,8 @@ export class Store {
   characters(): CharacterRow[] {
     return this.db
       .prepare(
-        `SELECT COALESCE(NULLIF(character_name, ''), 'unknown') AS name,
+        `SELECT COALESCE(character_guid, NULLIF(character_name, ''), 'unknown') AS key,
+                COALESCE(MAX(NULLIF(character_name, '')), 'unknown') AS name,
                 MAX(character_guid) AS guid,
                 COUNT(*) AS sessions,
                 MIN(start_ms) AS first_ms,
@@ -1005,7 +1023,7 @@ export class Store {
                 COALESCE(SUM(kills), 0) AS kills,
                 COALESCE(SUM(my_deaths), 0) AS deaths
            FROM session
-         GROUP BY name
+         GROUP BY key
          ORDER BY last_ms DESC`,
       )
       .all() as unknown as CharacterRow[];
@@ -1013,7 +1031,7 @@ export class Store {
 
   /** Headline PvP numbers, optionally for one character. */
   pvpSummary(character: string | null = null): PvpSummary {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character] : [];
     const row = this.db
       .prepare(
@@ -1047,7 +1065,7 @@ export class Store {
     const clauses = ['direction = ?'];
     const args: (string | number)[] = [direction];
     if (character) {
-      clauses.push('character_name = ?');
+      clauses.push(`${whoIs()} = ?`);
       args.push(character);
     }
     args.push(limit);
@@ -1073,7 +1091,7 @@ export class Store {
 
   /** The events themselves, newest first: the timeline behind the tables. */
   pvpEvents(character: string | null = null, limit = 200): PvpEventRow[] {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(`SELECT * FROM pvp_event ${where} ORDER BY ts_ms DESC LIMIT ?`)
@@ -1154,7 +1172,7 @@ export class Store {
    * would otherwise become the "median" you are measured against.
    */
   runsForZone(zoneName: string, limit = 200, character: string | null = null): SegmentRow[] {
-    const where = character ? 'zone_name = ? AND character_name = ?' : 'zone_name = ?';
+    const where = character ? `zone_name = ? AND ${whoIs()} = ?` : 'zone_name = ?';
     const args = character ? [zoneName, character, limit] : [zoneName, limit];
     return this.db
       .prepare(`SELECT * FROM zone_segment WHERE ${where} ORDER BY start_ms DESC LIMIT ?`)
@@ -1236,7 +1254,7 @@ export class Store {
 
   /** Recent runs across all sessions, newest first. Instances first in the UI's eyes. */
   recentRuns(limit = 60, character: string | null = null): SegmentRow[] {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(`SELECT * FROM zone_segment ${where} ORDER BY start_ms DESC LIMIT ?`)
@@ -1290,6 +1308,14 @@ export class Store {
       )
       .run(m.addonFile, m.globalName, pathJson, m.label, m.unit, kind, entity, Date.now());
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * Point a pinned series at a new key for the same character, keeping its history. For an addon
+   * that changed how it keys characters: a new metric would start the series over from nothing.
+   */
+  repinTrackedMetric(id: number, entity: string, label: string): void {
+    this.db.prepare('UPDATE tracked_metric SET entity = ?, label = ? WHERE id = ?').run(entity, label, id);
   }
 
   removeTrackedMetric(id: number): void {
@@ -1521,7 +1547,7 @@ export class Store {
       args.push(sinceMs);
     }
     if (character) {
-      clauses.push('character_name = ?');
+      clauses.push(`${whoIs()} = ?`);
       args.push(character);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -1633,7 +1659,7 @@ export class Store {
   }
 
   totals(character: string | null = null): Totals {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     return this.db
       .prepare(
         `SELECT COUNT(*) AS sessions,

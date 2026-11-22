@@ -296,6 +296,26 @@ describe('store: more than one character', () => {
     expect(alt.damage).toBe(500);
     expect(alt.sessions).toBe(1);
     expect(alt.guid).toBe('Player-2');
+    expect(alt.key).toBe('Player-2');
+  });
+
+  it('keeps two characters with one name apart: the guid carries the realm, the log name does not', () => {
+    const store0 = store();
+    // `Dead-Sadfatkid-PvP-US` on two realms: same string in the log, different guid prefixes.
+    store0.replaceSessionsFrom('/logs/a.txt', 0, [forCharacter('Twin', 'Durotar', 1_000_000, 9000)], {
+      guid: 'Player-6798-0001',
+      name: 'Twin',
+    });
+    store0.replaceSessionsFrom('/logs/b.txt', 0, [forCharacter('Twin', 'Durotar', 2_000_000, 500)], {
+      guid: 'Player-6934-0002',
+      name: 'Twin',
+    });
+    expect(store0.characters().map((c) => [c.key, c.name, c.damage])).toEqual([
+      ['Player-6934-0002', 'Twin', 500],
+      ['Player-6798-0001', 'Twin', 9000],
+    ]);
+    expect(store0.totals('Player-6798-0001').damage).toBe(9000);
+    expect(store0.recentRuns(10, 'Player-6934-0002')).toHaveLength(1);
   });
 
   it('scopes the session list and the totals to one character', () => {
@@ -310,11 +330,11 @@ describe('store: more than one character', () => {
     });
 
     expect(store0.listSessions(10).map((s) => s.character_name)).toEqual(['Alt', 'Main']);
-    expect(store0.listSessions(10, 'Main').map((s) => s.character_name)).toEqual(['Main']);
+    expect(store0.listSessions(10, 'Player-1').map((s) => s.character_name)).toEqual(['Main']);
     // Unscoped the total is both people added up; scoped it is one person's evening.
     expect(store0.totals().damage).toBe(9500);
-    expect(store0.totals('Alt').damage).toBe(500);
-    expect(store0.totals('Main').sessions).toBe(1);
+    expect(store0.totals('Player-2').damage).toBe(500);
+    expect(store0.totals('Player-1').sessions).toBe(1);
   });
 
   it('stamps the character on every run, not only on the session', () => {
@@ -341,8 +361,8 @@ describe('store: more than one character', () => {
 
     // Same zone, two characters: the alt's run must never become the main's comparison basis.
     expect(store0.runsForZone('Durotar')).toHaveLength(2);
-    expect(store0.runsForZone('Durotar', 200, 'Alt').map((r) => r.character_name)).toEqual(['Alt']);
-    expect(store0.recentRuns(10, 'Main').map((r) => r.character_name)).toEqual(['Main']);
+    expect(store0.runsForZone('Durotar', 200, 'Player-2').map((r) => r.character_name)).toEqual(['Alt']);
+    expect(store0.recentRuns(10, 'Player-1').map((r) => r.character_name)).toEqual(['Main']);
   });
 
   it('adds the character columns to runs stored before they existed, and backfills them', () => {
@@ -379,7 +399,7 @@ describe('store: more than one character', () => {
     const s = new Store(path);
     open.push(s);
     // Opening the database is the test: the index needs the column, so this threw before.
-    expect(s.runsForZone('Durotar', 10, 'Main').map((r) => r.zone_name)).toEqual(['Durotar']);
-    expect(s.recentRuns(10, 'Alt')).toEqual([]);
+    expect(s.runsForZone('Durotar', 10, 'Player-1').map((r) => r.zone_name)).toEqual(['Durotar']);
+    expect(s.recentRuns(10, 'Player-2')).toEqual([]);
   });
 });

@@ -12,7 +12,7 @@ import { Store } from '../src/store';
 import { renderHome } from '../src/ui/pages/home';
 import { renderRuns } from '../src/ui/pages/runs';
 import { renderRun } from '../src/ui/pages/run';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 
@@ -84,8 +84,7 @@ function ctxFor(s: Store, character: string | null = null): Ctx {
     installs: [],
     lastScan: { at: 0, entries: 0, errors: 0 },
     dbPath: ':memory:',
-    character,
-    charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+    ...resolveScope(s, character),
   };
 }
 
@@ -134,7 +133,8 @@ describe('sessions page, two characters', () => {
     // Session 1 is the other character's evening: not a row, not a link, not in the totals. The
     // switcher still names them, because switching to them has to stay possible.
     expect(html).not.toContain('/session?id=1');
-    expect(html).toContain('href="/?char=Dead%20Sadfatkid"');
+    // Links carry the identity key; the name above came in as an old-style bookmark and resolved.
+    expect(html).toContain('href="/?char=Player-1"');
   });
 
   it('offers the switcher only when there is more than one character', () => {
@@ -239,7 +239,7 @@ describe('run page comparison', () => {
       name: 'Slouch Mage',
     });
     const altRun = s
-      .segments(s.listSessions(10, 'Slouch Mage')[0]!.id)
+      .segments(s.listSessions(10, 'Player-2')[0]!.id)
       .find((r) => r.zone_name === 'Durotar')!;
 
     const html = renderRun(ctxFor(s), altRun.id)!;

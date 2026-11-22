@@ -13,7 +13,8 @@ import { columnChart } from '../charts';
 import { cards, characterBar, emptyState, metas, page, section, table, withCharacter } from '../shell';
 import { dateLabel, dur, esc, num, quantity, when } from '../format';
 import type { Ctx } from '../context';
-import { sameCharacter } from '../../characters';
+import { isCharacter } from '../../characters';
+import { readSensor, SENSOR_FILE } from '../../sensor';
 
 /**
  * Which tracked values belong on this page.
@@ -22,11 +23,26 @@ import { sameCharacter } from '../../characters';
  * series pinned to *this* character apply: an unpinned one is a sum over every wallet, and a series
  * pinned to someone else is someone else's number. The label always carries the entity, so even a
  * near-miss name match shows you what the figure is about.
+ *
+ * A sensor series is matched by the guid the sensor recorded for its character, because the sensor's
+ * name for a character and the log's can differ outright; other addons only have the name.
  */
 function trackedCards(ctx: Ctx, character: string | null): { k: string; v: string }[] {
+  const scope = { name: ctx.characterName, guid: ctx.characterGuid };
+  const sensorGuids = new Map(
+    character ? readSensor(ctx.installs).chars.map((c) => [c.key, c.meta.guid] as const) : [],
+  );
   return ctx.store
     .trackedMetrics()
-    .filter((m) => !character || (m.entity !== null && sameCharacter(m.entity, character)))
+    .filter(
+      (m) =>
+        !character ||
+        (m.entity !== null &&
+          isCharacter(scope, {
+            name: m.entity,
+            guid: m.addon_file === SENSOR_FILE ? (sensorGuids.get(m.entity) ?? null) : null,
+          })),
+    )
     .slice(0, character ? 4 : 2)
     .map((m) => {
       const latest = ctx.store.latestSample(m.id);
@@ -53,7 +69,7 @@ export function renderHome(ctx: Ctx): string {
       'No sessions yet',
       `<h1>Nothing recorded yet</h1>
        ${metas(['Portalstone is watching for combat logs']) }
-       ${character ? `<div class="notice">No sessions for <b>${character}</b>. <a href="/">Show every character</a></div>` : ''}
+       ${character ? `<div class="notice">No sessions for <b>${esc(ctx.characterName ?? character)}</b>. <a href="/">Show every character</a></div>` : ''}
        ${emptyState(
          'No sessions are stored, so there is nothing to chart.',
          `If you have played since installing this, open <a href="/diagnostics">diagnostics</a> — the log
@@ -111,7 +127,7 @@ export function renderHome(ctx: Ctx): string {
   ];
 
   const body = `
-    <h1>Sessions${character ? ` · ${character}` : ''}</h1>
+    <h1>Sessions${character ? ` · ${esc(ctx.characterName ?? character)}` : ''}</h1>
     ${metas([
       `${num(totals.sessions)} session${totals.sessions === 1 ? '' : 's'}`,
       `${dur(totals.durationS)} played`,
@@ -123,7 +139,7 @@ export function renderHome(ctx: Ctx): string {
     ${characterBar(ctx, '/')}
     ${
       character && trackedCards(ctx, character).length === 0
-        ? `<div class="sub" style="margin-top:8px">No tracked value is tied to ${esc(character)} yet.
+        ? `<div class="sub" style="margin-top:8px">No tracked value is tied to ${esc(ctx.characterName ?? character)} yet.
             The <a href="/">all characters</a> view shows the totals, and
             <a href="/tracked">tracked</a> can add one per character.</div>`
         : ''
@@ -140,7 +156,7 @@ export function renderHome(ctx: Ctx): string {
       'output per session',
       chart,
       `bar height is the metric that dominated each session — damage or healing, ${
-        character ? `${character} only` : 'every character'
+        character ? `${esc(ctx.characterName ?? character)} only` : 'every character'
       }`,
     )}
     ${section(
@@ -150,7 +166,7 @@ export function renderHome(ctx: Ctx): string {
         rows.map(({ s, t, live }) => {
           const href = `/session?id=${s.id}`;
           const who = showCharacter
-            ? `<td class="l"><a href="${withCharacter('/', s.character_name)}">${s.character_name || '—'}</a></td>`
+            ? `<td class="l"><a href="${withCharacter('/', s.character_guid ?? s.character_name)}">${esc(s.character_name || '—')}</a></td>`
             : '';
           return `<tr class="${live ? 'live' : ''}">
             <td class="l"><a href="${href}">${when(s.start_ms, s.offset_min)}</a></td>${who}

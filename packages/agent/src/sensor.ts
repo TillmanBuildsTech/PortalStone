@@ -190,7 +190,8 @@ function readSpec(char: LuaValue): SensorSpec | null {
 
 function readMeta(char: LuaValue, key: string): SensorMeta {
   return {
-    name: key,
+    // Schema 2 keys characters by name and realm; the display name is the one the addon recorded.
+    name: str(get(char, 'meta', 'name')) ?? key,
     realm: str(get(char, 'meta', 'realm')),
     guid: str(get(char, 'meta', 'guid')),
     class: str(get(char, 'meta', 'class')),
@@ -352,6 +353,7 @@ export function readSensor(installs: InstallInfo[]): SensorRead {
  * would only ever show one point per change.
  */
 const SEEDED: { path: string[]; label: (name: string) => string; unit: string }[] = [
+  // Labels use the character's name, not the storage key: `Played · Dead`, not the realm too.
   { path: ['chars', '*', 'gear', 'ilvl'], label: (n) => `Item level · ${n}`, unit: 'plain' },
   { path: ['chars', '*', 'played', 'total'], label: (n) => `Played · ${n}`, unit: 'seconds' },
   { path: ['chars', '*', 'xp', 'current'], label: (n) => `XP · ${n}`, unit: 'plain' },
@@ -367,16 +369,32 @@ const SEEDED: { path: string[]; label: (name: string) => string; unit: string }[
 export function ensureSensorMetrics(store: Store, read: SensorRead): string[] {
   if (read.state !== 'ok') return [];
   const added: string[] = [];
+  const keys = new Set(read.chars.map((c) => c.key));
   for (const char of read.chars) {
     for (const seed of SEEDED) {
-      const existing = store.trackedMetrics().find(
-        (m) =>
-          m.addon_file === SENSOR_FILE &&
-          m.entity === char.key &&
-          m.global_name === SENSOR_GLOBAL &&
-          m.path === JSON.stringify(seed.path),
-      );
-      const label = seed.label(char.key);
+      const seriesFor = (entity: string) =>
+        store.trackedMetrics().find(
+          (m) =>
+            m.addon_file === SENSOR_FILE &&
+            m.entity === entity &&
+            m.global_name === SENSOR_GLOBAL &&
+            m.path === JSON.stringify(seed.path),
+        );
+      const label = seed.label(char.meta.name);
+      let existing = seriesFor(char.key);
+      // Schema 1 keyed a character by name alone; schema 2 adds the realm. When the addon moves a
+      // character to its new key, the series seeded under the old one is that character's history,
+      // so it follows the character — unless something still answers to the old key, or two
+      // characters now carry that name and the old series cannot say which one it was.
+      const movable =
+        char.key !== char.meta.name &&
+        !keys.has(char.meta.name) &&
+        read.chars.filter((c) => c.meta.name === char.meta.name).length === 1;
+      const legacy = movable ? seriesFor(char.meta.name) : undefined;
+      if (!existing && legacy) {
+        store.repinTrackedMetric(legacy.id, char.key, label);
+        existing = legacy;
+      }
       store.addTrackedMetric({
         addonFile: SENSOR_FILE,
         globalName: SENSOR_GLOBAL,

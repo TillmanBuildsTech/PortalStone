@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountOf, Store } from '../src/store';
 import { clearAddonCache } from '../src/addons';
 import { sampleTracked } from '../src/tracking';
-import { readSensor } from '../src/sensor';
+import { ensureSensorMetrics, readSensor } from '../src/sensor';
+import { isCharacter } from '../src/characters';
+import { renderSensor } from '../src/ui/pages/sensor';
+import { resolveScope, type Ctx } from '../src/ui/context';
+import { refuseRequest } from '../src/server';
 import type { InstallInfo } from '../src/discover';
 
 /**
@@ -257,5 +261,143 @@ describe('repairing series recorded one account at a time', () => {
     expect(accountOf('E:/Games/World of Warcraft/_forever_/WTF/Account/LANC3RR1/SavedVariables/BagBrother.lua')).toBe(
       '_forever_/LANC3RR1',
     );
+  });
+});
+
+/** A schema-2 sensor entry: keyed by name and realm, with the name and guid in meta. */
+const sense2 = (name: string, realm: string, guid: string, updated: number): string =>
+  `PortalstoneDB = {\n["schema"] = 2,\n["chars"] = {\n["${name}-${realm}"] = { ["meta"] = { ["name"] = "${name}", ["realm"] = "${realm}", ["guid"] = "${guid}", ["updated"] = ${updated} }, ["played"] = { ["total"] = 900 } },\n},\n}\n`;
+
+describe('sensor keys with the realm in them', () => {
+  it('shows the character by name, and keeps its series when the addon re-keys it', () => {
+    const s = store();
+    const legacy = install([
+      { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Dead', 1_700_000_000), mtimeMs: T } } },
+    ]);
+    ensureSensorMetrics(s, readSensor(legacy));
+    const played = s.trackedMetrics().find((m) => m.label === 'Played · Dead')!;
+    sampleTracked(s, legacy);
+    expect(s.samples(played.id, 10)).toHaveLength(1);
+
+    // The addon, updated, moves the character to `Dead-<realm>` on its next flush.
+    const rekeyed = install([
+      {
+        name: 'ACC_A',
+        files: {
+          'PortalstoneSense.lua': {
+            body: sense2('Dead', 'CAMWOW US2 Realm 8 PvP', 'Player-6934-0194514D', 1_700_000_100),
+            mtimeMs: T + 100_000,
+          },
+        },
+      },
+    ]);
+    const read = readSensor(rekeyed);
+    expect(read.chars[0]!.meta.name).toBe('Dead');
+    expect(ensureSensorMetrics(s, read)).toEqual([]);
+    const after = s.trackedMetrics().find((m) => m.id === played.id)!;
+    expect(after.entity).toBe('Dead-CAMWOW US2 Realm 8 PvP');
+    expect(after.label).toBe('Played · Dead');
+    sampleTracked(s, rekeyed);
+    expect(s.samples(played.id, 10).map((x) => x.value)).toEqual([600, 900]);
+  });
+
+  it('does not guess when two re-keyed characters share the old name', () => {
+    const s = store();
+    ensureSensorMetrics(
+      s,
+      readSensor(install([{ name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Dead', 1), mtimeMs: T } } }])),
+    );
+    const read = readSensor(
+      install([
+        { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense2('Dead', 'Realm A', 'Player-1-A', 2), mtimeMs: T + 1 } } },
+        { name: 'ACC_B', files: { 'PortalstoneSense.lua': { body: sense2('Dead', 'Realm B', 'Player-2-B', 3), mtimeMs: T + 2 } } },
+      ]),
+    );
+    ensureSensorMetrics(s, read);
+    // The old series stays on the old key; each realm's character gets its own fresh series.
+    const entities = s.trackedMetrics().filter((m) => m.label === 'Played · Dead').map((m) => m.entity).sort();
+    expect(entities).toEqual(['Dead', 'Dead-Realm A', 'Dead-Realm B']);
+  });
+});
+
+describe('joining the sensor to the log by guid', () => {
+  it('matches the guid even when the names disagree outright', () => {
+    // This server's log says `Dead-Sadfatkid-PvP-US`; the client's UnitName says `Dead`.
+    const scoped = { name: 'Dead-Sadfatkid-PvP-US', guid: 'Player-6934-0194514D' };
+    expect(isCharacter(scoped, { name: 'Dead', guid: 'Player-6934-0194514D' })).toBe(true);
+    expect(isCharacter(scoped, { name: 'Dead Sadfatkid', guid: 'Player-6798-0000' })).toBe(false);
+    // BagBrother records no guid: the name is all there is.
+    expect(isCharacter(scoped, { name: 'Dead Sadfatkid', guid: null })).toBe(true);
+  });
+
+  it('scopes the sensor page to the log character it belongs to', () => {
+    const s = store();
+    s.replaceSessionsFrom('/logs/a.txt', 0, [], { guid: 'Player-6934-0194514D', name: 'Dead-Sadfatkid-PvP-US' });
+    const installs = install([
+      {
+        name: 'ACC_A',
+        files: {
+          'PortalstoneSense.lua': {
+            body: sense2('Dead', 'CAMWOW US2 Realm 8 PvP', 'Player-6934-0194514D', 1_700_000_100),
+            mtimeMs: T,
+          },
+        },
+      },
+      {
+        name: 'ACC_B',
+        files: { 'PortalstoneSense.lua': { body: sense2('Blister', 'Realm 2', 'Player-6798-0490B5DD', 1_700_000_000), mtimeMs: T } },
+      },
+    ]);
+    const ctx: Ctx = {
+      store: s,
+      installs,
+      lastScan: { at: 0, entries: 0, errors: 0 },
+      dbPath: ':memory:',
+      ...resolveScope(s, null),
+      character: 'Player-6934-0194514D',
+      characterName: 'Dead-Sadfatkid-PvP-US',
+      characterGuid: 'Player-6934-0194514D',
+    };
+    const html = renderSensor(ctx);
+    expect(html).toContain('<h2>Dead · CAMWOW US2 Realm 8 PvP');
+    expect(html).not.toContain('Blister');
+  });
+});
+
+describe('sharing the database with a second process', () => {
+  it('waits on a lock instead of failing at once', () => {
+    const s = store();
+    // The service and a dev run can both hold the file; a write must wait out the other's lock.
+    const row = s.db.prepare('PRAGMA busy_timeout').get() as Record<string, number>;
+    expect(Object.values(row)[0]).toBe(5000);
+  });
+});
+
+describe('requests from other websites', () => {
+  const P = 48120;
+  const req = (method: string, headers: Record<string, string>) => ({ method, headers });
+
+  it('serves its own pages, by either local name', () => {
+    expect(refuseRequest(req('GET', { host: '127.0.0.1:48120' }), P)).toBeNull();
+    expect(refuseRequest(req('GET', { host: 'localhost:48120' }), P)).toBeNull();
+  });
+
+  it('refuses a rebound hostname, even on a GET', () => {
+    expect(refuseRequest(req('GET', { host: 'attacker.example:48120' }), P)).toContain('Host');
+    expect(refuseRequest(req('GET', {}), P)).toContain('Host');
+  });
+
+  it('accepts writes from its own pages and from non-browser clients', () => {
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', origin: 'http://127.0.0.1:48120' }), P)).toBeNull();
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', 'sec-fetch-site': 'same-origin' }), P)).toBeNull();
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120' }), P)).toBeNull();
+  });
+
+  it('refuses a form posted from another site', () => {
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', origin: 'https://evil.example' }), P)).toContain('cross-origin');
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', origin: 'null' }), P)).toContain('cross-origin');
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', 'sec-fetch-site': 'cross-site' }), P)).toContain('cross-site');
+    // Another local port is another origin: some other app's page must not drive this one either.
+    expect(refuseRequest(req('POST', { host: '127.0.0.1:48120', origin: 'http://127.0.0.1:3000' }), P)).toContain('cross-origin');
   });
 });
