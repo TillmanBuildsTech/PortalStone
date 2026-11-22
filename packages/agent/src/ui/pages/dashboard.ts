@@ -479,7 +479,9 @@ function renderCardSection(ctx: Ctx, card: DashboardCardRow, w: number, h: numbe
       ${cardBody(data, effective, w, h)}`;
   }
 
-  return `<section class="dash-card size-${tier}${w >= 9 ? ' wide' : ''}" data-w="${w}" data-h="${h}">${head}<div class="dash-body">${body}</div></section>`;
+  return `<section class="dash-card size-${tier}${w >= 9 ? ' wide' : ''}" data-w="${w}" data-h="${h}" data-view="${esc(
+    effective,
+  )}">${head}<div class="dash-body">${body}</div></section>`;
 }
 
 function cardBody(data: CardData, view: CardView, w: number, h: number): string {
