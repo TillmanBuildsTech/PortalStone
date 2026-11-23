@@ -33,10 +33,14 @@ const NAV: { key: NavKey; href: string; label: string }[] = [
 const CSS = `
 :root {
   color-scheme: dark;
-  --bg: #0b0f14; --panel: #12181f; --panel-2: #161d26; --line: #222b36; --line-soft: #1a222c;
-  --ink: #d5dde6; --ink-strong: #eef4fa; --ink-dim: #8b98a6; --ink-faint: #66717e;
-  --accent: #6ea8fe; --good: #56d364; --bad: #ff7b72; --warn: #ffa657; --raid: #bc8cff;
-  --radius: 10px;
+  /* Stone & gold: a dark Warcraft frame lit by torchlight, data still reads first. */
+  --bg: #0a0b0d; --panel: #14130f; --panel-2: #1c190f; --line: #3a3322; --line-soft: #221f16;
+  --ink: #e7ddc8; --ink-strong: #fbf3df; --ink-dim: #a79c83; --ink-faint: #766d58;
+  --accent: #c8aa6e; --accent-bright: #f0d98a; --accent-dim: #8a7752;
+  --good: #5fcf6b; --bad: #ff6b61; --warn: #ffb454; --raid: #c79bff; --mana: #6ea8fe;
+  --radius: 9px;
+  --font-body: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-display: "Trajan Pro", "Cinzel", Constantia, "Palatino Linotype", "Book Antiqua", Georgia, serif;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -224,7 +228,114 @@ footer { max-width: 1180px; margin: 0 auto; padding: 0 22px 30px; color: var(--i
   .card .v { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ========================================================================
+ * Warcraft skin — stone, bronze and torch-gold, authored in CSS (no network,
+ * no imported art). Layered over the base rules above so structure is untouched
+ * and only the surface changes.
+ * ===================================================================== */
+html, body { min-height: 100%; }
+body {
+  font-family: var(--font-body);
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(1150px 540px at 50% -9%, rgba(200,170,110,.08), transparent 66%),
+    radial-gradient(920px 620px at 100% -4%, rgba(123,92,186,.06), transparent 60%),
+    radial-gradient(1200px 900px at 50% 120%, rgba(0,0,0,.55), transparent 70%),
+    repeating-linear-gradient(135deg, rgba(200,170,110,.014) 0 1px, transparent 1px 7px);
+  background-attachment: fixed;
+}
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a3322; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #534724; background-clip: padding-box; }
+
+/* Header: a gold-trimmed frame edge. */
+header { background: linear-gradient(180deg, rgba(16,14,10,.94), rgba(10,9,7,.9));
+  border-bottom: 1px solid var(--accent-dim);
+  box-shadow: 0 1px 0 rgba(200,170,110,.14), 0 6px 20px -6px rgba(0,0,0,.7); }
+.brand { font-family: var(--font-display); font-size: 16px; letter-spacing: .05em; font-weight: 600;
+  background: linear-gradient(180deg, #f6e7b4, #c8a85f 70%, #a9823f);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+.brand svg { width: 21px; height: 21px; display: block; flex: 0 0 auto;
+  filter: drop-shadow(0 0 5px rgba(200,170,110,.5)); }
+nav a.on { color: var(--accent-bright); border-bottom-color: var(--accent);
+  text-shadow: 0 0 12px rgba(200,170,110,.45); }
+.status .live { color: var(--good); text-shadow: 0 0 10px rgba(95,207,107,.35); }
+
+/* Engraved titles. */
+h1 { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: .004em;
+  color: var(--ink-strong); text-shadow: 0 1px 2px rgba(0,0,0,.55); }
+h2 { color: #bba169; }
+h2::before { content: "◆"; color: var(--accent); font-size: 7px; opacity: .85;
+  position: relative; top: -1px; text-shadow: 0 0 6px rgba(200,170,110,.5); }
+h2 .hint { color: var(--ink-faint); }
+
+/* Cards as inlaid stone tiles, the lead one gilded. */
+.card { background-color: var(--panel);
+  background-image: linear-gradient(180deg, rgba(255,240,205,.03), transparent 44%);
+  border: 1px solid var(--line-soft); box-shadow: inset 0 1px 0 rgba(255,240,205,.045); }
+.card .k { color: var(--ink-faint); }
+.card.lead { border-color: var(--accent-dim);
+  background-image: linear-gradient(180deg, rgba(200,170,110,.13), rgba(200,170,110,.02) 60%);
+  box-shadow: inset 0 1px 0 rgba(240,217,138,.2), 0 0 0 1px rgba(200,170,110,.1),
+    0 12px 32px -16px rgba(200,170,110,.35); }
+.card.lead .k { color: #cbb588; }
+.card.lead .v { color: var(--accent-bright); }
+.card.lead .v small { color: #b79f6f; }
+
+/* Pills: bronze outlines; the chosen character struck in solid gold. */
+.pill { background: var(--panel-2); border-color: var(--line); color: var(--ink-dim); }
+.pill.sel { color: #1b1408; border-color: var(--accent-dim); font-weight: 600;
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  box-shadow: 0 0 10px -2px rgba(200,170,110,.5); }
+.pill.dungeon { color: var(--mana); border-color: #2a3b55; }
+.pill.raid { color: var(--raid); border-color: #3a2a54; }
+.pill.battleground { color: var(--warn); border-color: #4a3a24; }
+.pill.spec { color: #d6bd82; border-color: #4c4126; }
+.pill.ok { color: var(--good); border-color: #2a4a2b; }
+
+/* Controls carved from the same stone, lettered in gold. */
+button.primary, .linkbtn { color: var(--accent-bright);
+  background: linear-gradient(180deg, #2b2416, #1b1710); border: 1px solid var(--accent-dim); }
+button.primary:hover, .linkbtn:hover { border-color: var(--accent);
+  background: linear-gradient(180deg, #38301c, #241f13); text-decoration: none;
+  box-shadow: 0 0 12px -3px rgba(200,170,110,.45); }
+.field input[type="text"], .field select, select.unit { background: var(--panel-2); border-color: var(--line); }
+.field input[type="text"]:focus, .field select:focus { border-color: var(--accent); }
+
+/* Distribution dots: your mark glows like an enchant. */
+.dist-track { background: #241f15; }
+.dist .dot { background: #4a4536; box-shadow: 0 0 0 1px var(--bg); }
+.dist .dot.you { background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 9px 2px rgba(200,170,110,.5); }
+.meter { background: #241f15; }
+
+/* Tables: a faint warm wash on hover; totals ruled in bronze. */
+tbody tr:hover { background: rgba(200,170,110,.05); }
+th { background: var(--bg); color: var(--ink-faint); }
+.empty { border-color: var(--line); }
+.notice { border-left-color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 `;
+
+/** The portal mark as a self-contained favicon (served inline, so no network and no 404). */
+const FAVICON =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E" +
+  "%3Cellipse cx='12' cy='12' rx='6.4' ry='9' stroke='%23e0b968' stroke-width='1.8'/%3E" +
+  "%3Cellipse cx='12' cy='12' rx='3' ry='6.3' stroke='%23e0b968' stroke-width='1.3'/%3E" +
+  "%3Ccircle cx='12' cy='12' r='1.7' fill='%23f0d98a'/%3E%3C/svg%3E";
+
+/** A portal seen edge-on — the app's namesake, drawn in gold. Original mark, no imported art. */
+const BRAND_MARK = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><defs>
+<linearGradient id="pg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6e7b4"/>
+<stop offset="1" stop-color="#b98f46"/></linearGradient></defs>
+<ellipse cx="12" cy="12" rx="6.4" ry="9" stroke="url(#pg)" stroke-width="1.6"/>
+<ellipse cx="12" cy="12" rx="9" ry="6.4" stroke="url(#pg)" stroke-width="1.1" opacity=".55"/>
+<ellipse cx="12" cy="12" rx="3" ry="6.3" stroke="url(#pg)" stroke-width="1.15" opacity=".82"/>
+<circle cx="12" cy="12" r="1.6" fill="url(#pg)"/></svg>`;
 
 export interface PageOptions {
   active?: NavKey;
@@ -267,8 +378,9 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
     : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${refresh}
+<link rel="icon" href="${FAVICON}">
 <title>${esc(title)} · Portalstone</title><style>${CSS}</style>${styles}${scripts}</head>
-<body><header><div class="bar"><a class="brand" href="/"><i></i>Portalstone</a><nav>${nav}</nav>
+<body><header><div class="bar"><a class="brand" href="/">${BRAND_MARK}Portalstone</a><nav>${nav}</nav>
 <div class="status">${status}</div></div></header>
 <main>${body}</main>
 <footer>Portalstone · read from your own combat logs · nothing leaves this machine</footer></body></html>`;

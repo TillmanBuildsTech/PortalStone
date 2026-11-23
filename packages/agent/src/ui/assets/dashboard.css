@@ -40,8 +40,8 @@
 /* A card carries the panel; while moving or resizing it lifts out. */
 .grid-stack-item.ui-draggable-dragging .dash-card,
 .grid-stack-item.ui-resizable-resizing .dash-card {
-  border-color: #2c5480;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  border-color: var(--accent);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5), 0 0 16px -4px rgba(200, 170, 110, 0.4);
 }
 .grid-stack-item.ui-draggable-dragging, .grid-stack-item.ui-resizable-resizing { z-index: 30; }
 
