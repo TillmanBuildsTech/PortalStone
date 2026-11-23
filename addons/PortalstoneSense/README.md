@@ -19,7 +19,23 @@ npm run addon:install          # copies into every flavor found, or use --instal
 ```
 
 Then `/reload` in game (or log out and back in). `/psense write` forces a snapshot; `/psense` prints
-the current one.
+the current one and whether the combat log is on.
+
+### Combat logging
+
+It also keeps combat logging on, everywhere, all the time, so no other logging addon is needed. It
+checks every two seconds and turns logging back on if another addon has turned it off. Don't run one
+that logs "only in instances", such as AutoCombatLogger: it turns logging off on every zone change,
+each off/on cycle starts a new log file, and this addon will tell you once per session when that
+happens.
+
+You still decide:
+
+- **`/psense newlog`** closes the current log file and starts a new one about a second later.
+  This is how to give a raid its own file to upload, without ever stopping logging.
+- **`/combatlog`** works as it always has. If you turn logging off with it, it stays off until you
+  type `/combatlog` again, run `/psense newlog`, or next log in. A `/reload` keeps it off. Anything
+  played while it's off never reaches Portalstone.
 
 The installer copies two files into `Interface/AddOns/PortalstoneSense`. It never touches `WTF` —
 SavedVariables belong to the game. The agent itself never writes to the game directory at all; only
