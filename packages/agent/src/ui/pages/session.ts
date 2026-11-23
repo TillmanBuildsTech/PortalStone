@@ -59,6 +59,27 @@ export function renderSession(ctx: Ctx, id: number, opts: { basis?: Basis | null
     : [];
   const runs = segments.map((seg) => ({ seg, st: throughputFrom(seg) }));
   const maxRate = Math.max(...runs.map((r) => r.st.rate), 1);
+
+  // When an evening holds a dungeon (or raid, or battleground) alongside questing before and after
+  // it, the headline numbers below are the whole night, not the instance. This callout links
+  // straight to each instance's own run page — that run on its own, nothing before or after — so the
+  // dungeon can be read in isolation. Shown only when there is other zone time to separate it from.
+  const instances = segments.filter(
+    (seg) => seg.kind === 'dungeon' || seg.kind === 'raid' || seg.kind === 'battleground',
+  );
+  const instancesCallout =
+    instances.length && segments.length > instances.length
+      ? `<div class="notice">Instances in this session —
+          ${instances
+            .map(
+              (seg) =>
+                `<a href="/run?id=${seg.id}">${esc(seg.zone_name)}</a>${kindPill(seg.kind)} <span class="sub">${dur(
+                  seg.duration_s,
+                )}</span>`,
+            )
+            .join(' · ')}.
+          Open one to see just that run, with nothing from before or after it.</div>`
+      : '';
   // What the abilities say about the build. A session that straddles a respec reads "mixed" on
   // throughput, which is true and useless; the phases date the switch instead.
   const spec = specForSession(store, segments);
@@ -210,6 +231,7 @@ export function renderSession(ctx: Ctx, id: number, opts: { basis?: Basis | null
       specLine,
       `${num(segments.length)} zone visit${segments.length === 1 ? '' : 's'}`,
     ])}
+    ${instancesCallout}
     ${cards([
       { k: `${t.kind} per second`, v: num(t.rate), hint: 'per second in combat', lead: true },
       { k: `${t.kind} done`, v: num(t.total) },

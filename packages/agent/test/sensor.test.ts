@@ -194,7 +194,12 @@ describe('ensureSensorMetrics', () => {
   it('seeds one series per character for the numbers worth charting', () => {
     const s = store();
     const seeded = ensureSensorMetrics(s, readSensor([installWith(SENSOR_FILE, SENSOR)]));
-    expect(seeded).toEqual(['Item level · Dead Sadfatkid', 'Played · Dead Sadfatkid', 'XP · Dead Sadfatkid']);
+    expect(seeded).toEqual([
+      'Item level · Dead Sadfatkid',
+      'Played · Dead Sadfatkid',
+      'XP · Dead Sadfatkid',
+      'Gold · Dead Sadfatkid',
+    ]);
     const metrics = s.trackedMetrics();
     expect(metrics.map((m) => m.label)).toEqual(seeded);
     // Pinned to the character: two characters' item level must never be summed into one line.
@@ -208,7 +213,7 @@ describe('ensureSensorMetrics', () => {
     ensureSensorMetrics(s, readSensor(install));
     const again = ensureSensorMetrics(s, readSensor(install));
     expect(again).toEqual([]);
-    expect(s.trackedMetrics()).toHaveLength(3);
+    expect(s.trackedMetrics()).toHaveLength(4);
   });
 
   it('seeds nothing when the addon is not there', () => {

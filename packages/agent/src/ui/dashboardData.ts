@@ -17,7 +17,41 @@
  * No HTML lives here: pages render, this computes.
  */
 import type { SessionRow, Store, TrackedMetricRow, ZoneAggregateRow } from '../store';
+import type { InstallInfo } from '../discover';
+import { isCharacter } from '../characters';
+import { readSensor, SENSOR_FILE } from '../sensor';
 import { compact, dateLabel, num, quantity, quantityAxis, when } from './format';
+
+/**
+ * The character a card is scoped to, resolved against both name spaces the app joins.
+ *
+ * `character` is the combat-log identity key used by session and zone metrics. A tracked metric,
+ * though, is keyed by the addon's own name for a character, so matching one to the scoped character
+ * needs the name and (for the sensor, which records it) the guid as well — `sensorGuids` maps a
+ * sensor entity key to its guid. Null, or a null `character`, means "all characters": nothing is
+ * filtered out.
+ */
+export interface MetricScope {
+  character: string | null;
+  name: string | null;
+  guid: string | null;
+  sensorGuids: Map<string, string | null>;
+}
+
+/**
+ * Build the scope for a request. Reading the sensor is only needed when a character is actually
+ * chosen, so the all-characters view pays nothing for it.
+ */
+export function metricScope(
+  character: string | null,
+  name: string | null,
+  guid: string | null,
+  installs: InstallInfo[],
+): MetricScope {
+  const sensorGuids = new Map<string, string | null>();
+  if (character) for (const c of readSensor(installs).chars) sensorGuids.set(c.key, c.meta.guid);
+  return { character, name, guid, sensorGuids };
+}
 
 export type MetricShape = 'time' | 'split';
 export type CardView = 'stat' | 'bar' | 'pie' | 'line' | 'table';
@@ -45,10 +79,10 @@ export interface MetricDef {
   stat: 'total' | 'latest';
   description: string;
   /**
-   * The points in the window. `character` scopes the metric to one character; a metric that adds
+   * The points in the window. `scope` scopes the metric to one character; a metric that adds
    * sessions up has to honour it or a card silently mixes an alt's numbers with a main's.
    */
-  points(store: Store, sinceMs: number | null, character?: string | null): CardPoint[];
+  points(store: Store, sinceMs: number | null, scope?: MetricScope | null): CardPoint[];
 }
 
 export const GROUPS: { id: MetricDef['group']; label: string }[] = [
@@ -210,7 +244,7 @@ const COMBAT: MetricDef[] = [
     unit: 'damage',
     stat: 'latest',
     description: 'Damage you dealt, totalled for each session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.damage_done, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.damage_done, scope?.character ?? null),
   },
   {
     id: 'session_healing',
@@ -220,7 +254,7 @@ const COMBAT: MetricDef[] = [
     unit: 'healing',
     stat: 'latest',
     description: 'Healing you did, totalled for each session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.healing_done, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.healing_done, scope?.character ?? null),
   },
   {
     id: 'session_damage_taken',
@@ -230,7 +264,7 @@ const COMBAT: MetricDef[] = [
     unit: 'damage',
     stat: 'latest',
     description: 'Damage you took, totalled for each session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.damage_taken, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.damage_taken, scope?.character ?? null),
   },
   {
     id: 'session_kills',
@@ -240,7 +274,7 @@ const COMBAT: MetricDef[] = [
     unit: 'count',
     stat: 'latest',
     description: 'Killing blows you landed, per session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.kills, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.kills, scope?.character ?? null),
   },
   {
     id: 'session_deaths',
@@ -250,7 +284,7 @@ const COMBAT: MetricDef[] = [
     unit: 'count',
     stat: 'latest',
     description: 'Times you died, per session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.my_deaths, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.my_deaths, scope?.character ?? null),
   },
   {
     id: 'session_casts',
@@ -260,7 +294,7 @@ const COMBAT: MetricDef[] = [
     unit: 'count',
     stat: 'latest',
     description: 'Spells you cast, per session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.casts, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.casts, scope?.character ?? null),
   },
   {
     id: 'session_time',
@@ -270,7 +304,7 @@ const COMBAT: MetricDef[] = [
     unit: 'seconds',
     stat: 'latest',
     description: 'Wall-clock length of each session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.duration_s, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.duration_s, scope?.character ?? null),
   },
   {
     id: 'session_combat_time',
@@ -280,7 +314,7 @@ const COMBAT: MetricDef[] = [
     unit: 'seconds',
     stat: 'latest',
     description: 'Time actually spent engaged, per session in the window.',
-    points: (store, since, char) => sessionPoints(store, since, (s) => s.engaged_s, char),
+    points: (store, since, scope) => sessionPoints(store, since, (s) => s.engaged_s, scope?.character ?? null),
   },
 ];
 
@@ -293,7 +327,7 @@ const PLACES: MetricDef[] = [
     unit: 'damage',
     stat: 'total',
     description: 'Every zone you dealt damage in during the window, largest first.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.damage_done, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.damage_done, scope?.character ?? null),
   },
   {
     id: 'zone_healing',
@@ -303,7 +337,7 @@ const PLACES: MetricDef[] = [
     unit: 'healing',
     stat: 'total',
     description: 'Every zone you healed in during the window, largest first.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.healing_done, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.healing_done, scope?.character ?? null),
   },
   {
     id: 'zone_time',
@@ -313,7 +347,7 @@ const PLACES: MetricDef[] = [
     unit: 'seconds',
     stat: 'total',
     description: 'Wall-clock time in each zone visit, added up over the window.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.duration_s, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.duration_s, scope?.character ?? null),
   },
   {
     id: 'zone_kills',
@@ -323,7 +357,7 @@ const PLACES: MetricDef[] = [
     unit: 'count',
     stat: 'total',
     description: 'Killing blows you landed, grouped by zone, over the window.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.kills, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.kills, scope?.character ?? null),
   },
   {
     id: 'zone_deaths',
@@ -333,7 +367,7 @@ const PLACES: MetricDef[] = [
     unit: 'count',
     stat: 'total',
     description: 'Where you died during the window, grouped by zone.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.my_deaths, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.my_deaths, scope?.character ?? null),
   },
   {
     id: 'zone_runs',
@@ -343,7 +377,7 @@ const PLACES: MetricDef[] = [
     unit: 'count',
     stat: 'total',
     description: 'How many times you visited each zone in the window.',
-    points: (store, since, char) => zonePoints(store, since, (z) => z.runs, char),
+    points: (store, since, scope) => zonePoints(store, since, (z) => z.runs, scope?.character ?? null),
   },
 ];
 
@@ -397,11 +431,29 @@ function trackedMetrics(store: Store): MetricDef[] {
       unit: (m.unit === 'copper' || m.unit === 'seconds' ? m.unit : 'plain') as Unit,
       stat: 'latest',
       description: `Sampled from ${m.addon_file} at every SavedVariables flush.`,
-      points: (s, since) => trackedPoints(s, m, since),
+      points: (s, since, scope) => trackedPoints(s, m, since, scope),
     }));
 }
 
-function trackedPoints(store: Store, metric: TrackedMetricRow, sinceMs: number | null): CardPoint[] {
+/**
+ * When a character is chosen, a tracked series is only theirs if it is pinned to them. A series
+ * pinned to someone else is someone else's number, and an unpinned one is a sum over every wallet —
+ * neither is this character's, so the card shows nothing rather than a misleading figure. Unscoped,
+ * every series is shown as stored. This is the same rule the sessions page applies to its cards.
+ */
+function trackedBelongsToScope(metric: TrackedMetricRow, scope: MetricScope): boolean {
+  if (metric.entity === null) return false;
+  const guid = metric.addon_file === SENSOR_FILE ? (scope.sensorGuids.get(metric.entity) ?? null) : null;
+  return isCharacter({ name: scope.name, guid: scope.guid }, { name: metric.entity, guid });
+}
+
+function trackedPoints(
+  store: Store,
+  metric: TrackedMetricRow,
+  sinceMs: number | null,
+  scope?: MetricScope | null,
+): CardPoint[] {
+  if (scope?.character && !trackedBelongsToScope(metric, scope)) return [];
   const unit: Unit = metric.unit === 'copper' || metric.unit === 'seconds' ? metric.unit : 'plain';
   return store
     .samples(metric.id, 2000)
@@ -439,10 +491,10 @@ export function cardData(
   metric: MetricDef,
   rangeMinutes = 0,
   now = Date.now(),
-  character: string | null = null,
+  scope: MetricScope | null = null,
 ): CardData {
   const since = rangeStart(rangeMinutes, now);
-  const points = metric.points(store, since, character).filter((p) => Number.isFinite(p.value));
+  const points = metric.points(store, since, scope).filter((p) => Number.isFinite(p.value));
   const total = points.reduce((sum, p) => sum + p.value, 0);
 
   if (metric.shape === 'split') {

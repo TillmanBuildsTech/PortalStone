@@ -347,16 +347,19 @@ export function readSensor(installs: InstallInfo[]): SensorRead {
  * The numbers worth a time series, seeded so a fresh install has a baseline without the user
  * having to hand-pick paths in the browser first.
  *
- * Only three, deliberately: item level and played time are the two axes every benchmark needs and
- * the log cannot supply, and XP is the one that moves while levelling. Everything else the addon
- * writes is a snapshot of the current state, which belongs on the sensor page, not in a chart that
- * would only ever show one point per change.
+ * Four, deliberately: item level and played time are the two axes every benchmark needs and the
+ * log cannot supply, XP is the one that moves while levelling, and gold is the one players ask
+ * about most — all four move over time and are kept per character, so switching characters shows
+ * that character's own figure instead of a sum over every wallet. Everything else the addon writes
+ * is a snapshot of the current state, which belongs on the sensor page, not in a chart that would
+ * only ever show one point per change.
  */
 const SEEDED: { path: string[]; label: (name: string) => string; unit: string }[] = [
   // Labels use the character's name, not the storage key: `Played · Dead`, not the realm too.
   { path: ['chars', '*', 'gear', 'ilvl'], label: (n) => `Item level · ${n}`, unit: 'plain' },
   { path: ['chars', '*', 'played', 'total'], label: (n) => `Played · ${n}`, unit: 'seconds' },
   { path: ['chars', '*', 'xp', 'current'], label: (n) => `XP · ${n}`, unit: 'plain' },
+  { path: ['chars', '*', 'money'], label: (n) => `Gold · ${n}`, unit: 'copper' },
 ];
 
 /**

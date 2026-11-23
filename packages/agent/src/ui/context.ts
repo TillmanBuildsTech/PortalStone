@@ -31,6 +31,12 @@ export interface Ctx {
   characterGuid: string | null;
   /** the same character, ready to paste into a query string (`?char=…` or `&char=…`) */
   charQuery: string;
+  /**
+   * The current request's path and query with `char` stripped, so the header switcher can rebuild
+   * a link to this same page under a different character. Absent in unit tests that build a Ctx by
+   * hand; the switcher then falls back to the active nav link's href.
+   */
+  path?: string;
 }
 
 /** The scope fields of a Ctx, from a raw `?char=` value. */

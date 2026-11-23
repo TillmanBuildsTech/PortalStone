@@ -79,6 +79,27 @@ function snapshot(start: number, damage: number, zone = 'Durotar', kind = 'zone'
   };
 }
 
+/** One evening that visits an open-world zone and then a dungeon, so a kind filter has something to cut. */
+function mixedNight(): SessionSnapshot {
+  const start = 3_000_000;
+  const zone = bag({ damageDone: 1000, durationS: 300, engagedS: 150, kills: 2 });
+  const dungeon = bag({ damageDone: 8000, durationS: 1200, engagedS: 900, kills: 20 });
+  return {
+    startMs: start,
+    endMs: start + 1_500_000,
+    startByte: 0,
+    offsetMin: -420,
+    zoneId: 1,
+    zoneName: 'Durotar',
+    zones: [
+      { zoneId: 1, name: 'Durotar', kind: 'zone', startMs: start, endMs: start + 300_000, ...zone },
+      { zoneId: 2, name: 'Deadmines', kind: 'dungeon', startMs: start + 300_000, endMs: start + 1_500_000, ...dungeon },
+    ],
+    open: bag(),
+    encounters: [],
+  };
+}
+
 function ctxFor(s: Store, character: string | null = null): Ctx {
   return {
     store: s,
@@ -134,8 +155,9 @@ describe('sessions page, two characters', () => {
     // Session 1 is the other character's evening: not a row, not a link, not in the totals. The
     // switcher still names them, because switching to them has to stay possible.
     expect(html).not.toContain('/session?id=1');
-    // Links carry the identity key; the name above came in as an old-style bookmark and resolved.
-    expect(html).toContain('href="/?char=Player-1"');
+    // The header switcher still offers the other character by their identity key, so switching to
+    // them stays possible; the name above came in as an old-style bookmark and resolved.
+    expect(html).toContain('value="/?char=Player-1"');
   });
 
   it('offers the switcher only when there is more than one character', () => {
@@ -228,6 +250,24 @@ describe('runs page, two characters', () => {
     const alt = renderRuns(ctxFor(twoCharacters(), 'Slouch Mage'));
     expect(alt).toContain('<h1>Runs · Slouch Mage</h1>');
     expect(alt).not.toContain('/run?id=1');
+  });
+
+  it('filters the flat list to one kind of run', () => {
+    const s = store();
+    s.replaceSessionsFrom('/logs/a.txt', 0, [mixedNight()], { guid: 'Player-1', name: 'Solo' });
+
+    const all = renderRuns(ctxFor(s));
+    expect(all).toContain('>Durotar<');
+    expect(all).toContain('>Deadmines<');
+
+    const dungeons = renderRuns(ctxFor(s), { kind: 'dungeon' });
+    expect(dungeons).toContain('<h1>Runs · dungeons</h1>');
+    expect(dungeons).toContain('>Deadmines<');
+    // the open-world zone is gone from the list once the filter is on dungeons
+    expect(dungeons).not.toContain('>Durotar<');
+
+    // an unknown filter value is ignored rather than emptying the page
+    expect(renderRuns(ctxFor(s), { kind: 'nonsense' })).toContain('>Durotar<');
   });
 });
 

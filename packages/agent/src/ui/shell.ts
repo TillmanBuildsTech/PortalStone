@@ -6,6 +6,8 @@
  */
 import { ago, dur, esc, num, plural } from './format';
 import type { Ctx } from './context';
+import { isCharacter } from '../characters';
+import { readSensor } from '../sensor';
 
 export type NavKey =
   | 'sessions'
@@ -64,9 +66,19 @@ nav a { color: var(--ink-dim); padding: 0 11px; display: flex; align-items: cent
   font-size: 13px; border-bottom: 2px solid transparent; }
 nav a:hover { color: var(--ink); text-decoration: none; }
 nav a.on { color: var(--ink-strong); border-bottom-color: var(--accent); }
-.status { margin-left: auto; color: var(--ink-faint); font-size: 12px; display: flex;
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 16px; min-width: 0; }
+.status { color: var(--ink-faint); font-size: 12px; display: flex;
   align-items: center; gap: 10px; }
 .status .live { color: var(--good); }
+/* The character switcher: one dropdown in the frame, on every page that sums characters, so the
+ * chosen character follows you instead of being re-picked per page. */
+.who { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.who-label { color: var(--ink-faint); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .07em; white-space: nowrap; }
+.who select { background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 12.5px; max-width: 220px;
+  text-overflow: ellipsis; cursor: pointer; }
+.who select:focus { border-color: var(--accent); outline: none; }
 
 main { max-width: 1180px; margin: 0 auto; padding: 26px 22px 72px; }
 h1 { font-size: 21px; line-height: 1.3; margin: 0 0 4px; color: var(--ink-strong); font-weight: 650;
@@ -222,6 +234,8 @@ footer { max-width: 1180px; margin: 0 auto; padding: 0 22px 30px; color: var(--i
   nav { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   nav a { padding: 0 7px; font-size: 12px; flex: 0 0 auto; }
   .status { display: none; }
+  .who-label { display: none; }
+  .who select { max-width: 150px; }
   main { padding: 18px 14px 60px; }
   .card .v { font-size: 16px; }
 }
@@ -385,37 +399,57 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
     ? `<span class="${last.errors ? '' : 'live'}">${last.errors ? `${last.errors} log error(s)` : 'scanning ok'}</span>
        <span>${last.at ? `scanned ${ago(last.at)}` : 'no scan yet'}</span>`
     : '';
+  // The switcher only belongs on pages that add characters up; a page about one session or run is
+  // already about one character. Its base is this exact page (char stripped) so the choice sticks.
+  const base = opts.ctx?.path ?? NAV.find((n) => n.key === opts.active)?.href ?? '/';
+  const switcher = opts.scope && opts.ctx ? scopeSwitcher(opts.ctx, base) : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${refresh}
 <link rel="icon" href="${FAVICON}">
 <title>${esc(title)} · Portalstone</title><style>${CSS}</style>${styles}${scripts}</head>
 <body><header><div class="bar"><a class="brand" href="/">${BRAND_MARK}Portalstone</a><nav>${nav}</nav>
-<div class="status">${status}</div></div></header>
+<div class="hdr-right">${switcher}<div class="status">${status}</div></div></div></header>
 <main>${body}</main>
 <footer>Portalstone · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
 }
 
-/** "who: all characters · Slouch Mage · Dead-Sadfatkid" — the scope switch for pages that sum. */
-export function characterBar(ctx: Ctx, base: string): string {
+/**
+ * The character switcher that lives in the header frame: a dropdown of every character, plus "all
+ * characters", that reloads the current page scoped to the one chosen. Returned empty (so nothing
+ * shows) when there is only one character — a picker with a single option is noise.
+ *
+ * `base` is the current page with `char` stripped; each option appends the character's identity key
+ * to it, so switching keeps you on the same page.
+ *
+ * The label names the WoW account only when there is more than one to tell apart. Combat logs never
+ * record an account, so a character is matched to its account through the sensor addon (which does),
+ * by the same guid-or-name rule the rest of the app uses; a character the sensor has not seen simply
+ * shows without an account prefix.
+ */
+export function scopeSwitcher(ctx: Ctx, base: string): string {
   const roster = ctx.store.characters();
-  // One character is not a choice; showing a picker with a single option is noise.
   if (roster.length < 2) return '';
-  const chip = (href: string, label: string, on: boolean, hint: string): string =>
-    `<a class="pill${on ? ' sel' : ''}" href="${esc(href)}" title="${esc(hint)}">${esc(label)}</a>`;
-  const parts = [
-    chip(base, 'all characters', ctx.character === null, `every character, added up — ${roster.length} of them`),
-  ];
-  for (const c of roster) {
-    parts.push(
-      chip(
-        withCharacter(base, c.key),
-        c.name,
-        ctx.character === c.key,
-        `${c.name} · ${c.sessions} session${c.sessions === 1 ? '' : 's'} · last played ${ago(c.last_ms)}`,
-      ),
-    );
-  }
-  return `<div class="chars"><span class="lbl">character</span>${parts.join(' ')}</div>`;
+
+  const sensor = readSensor(ctx.installs);
+  const accountOf = (c: { name: string; guid: string | null }): string | null =>
+    sensor.chars.find((sc) => isCharacter(c, { name: sc.meta.name, guid: sc.meta.guid }))?.account ?? null;
+  const accounts = roster.map(accountOf);
+  const showAccount = new Set(accounts.filter((a): a is string => a !== null)).size >= 2;
+
+  const option = (value: string, label: string, on: boolean): string =>
+    `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+
+  const options = [option(base, 'all characters', ctx.character === null)];
+  roster.forEach((c, i) => {
+    const account = accounts[i];
+    const label = showAccount && account ? `${account} · ${c.name}` : c.name;
+    options.push(option(withCharacter(base, c.key), label, ctx.character === c.key));
+  });
+
+  return `<label class="who"><span class="who-label">character</span>
+    <select aria-label="filter by character" onchange="if(this.value)location.href=this.value">${options.join(
+      '',
+    )}</select></label>`;
 }
 
 /** "kills 212 · deaths 1 · 3h 12m" — the line under every page title. */

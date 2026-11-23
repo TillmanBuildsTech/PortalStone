@@ -12,7 +12,7 @@
  *
  * Everything here comes from the log alone. No score, no rating, no "skill" — just the exchanges.
  */
-import { cards, characterBar, emptyState, metas, page, section, table } from '../shell';
+import { cards, emptyState, metas, page, section, table } from '../shell';
 import { esc, num, when } from '../format';
 import type { Ctx } from '../context';
 import type { PvpOpponentRow } from '../../store';
@@ -36,7 +36,6 @@ export function renderPvp(ctx: Ctx): string {
       'PvP',
       `<h1>PvP${character ? ` · ${esc(ctx.characterName ?? character)}` : ''}</h1>
        ${metas(['nothing recorded'])}
-       ${characterBar(ctx, '/pvp')}
        ${emptyState(
          'No player has killed or been killed by you in the logs on this machine.',
          `Player deaths are only counted when the combat log names a player on both sides of the
@@ -55,7 +54,6 @@ export function renderPvp(ctx: Ctx): string {
       summary.lastMs ? `last exchange ${when(summary.lastMs, tz)}` : null,
       !character ? 'every character' : null,
     ])}
-    ${characterBar(ctx, '/pvp')}
     ${cards([
       { k: 'player kills', v: num(summary.kills), lead: true },
       { k: 'killed by players', v: num(summary.deaths) },

@@ -10,6 +10,7 @@ import {
   findMetric,
   isCardView,
   metricCatalog,
+  metricScope,
   rangeLabel,
   rangeStart,
   viewFits,
@@ -231,6 +232,30 @@ describe('dashboards: data', () => {
     const data = cardData(s, metric!);
     expect(data.points.map((p) => p.value)).toEqual([100, 250]);
     expect(data.latest).toBe(250);
+  });
+
+  it('scopes a tracked series to the chosen character: a pinned one shows only on its own page', () => {
+    const s = store();
+    s.replaceSessionsFrom('/logs/main.txt', 0, [snapshot()], { guid: 'Player-1', name: 'Dead-Sadfatkid-PvP-US' });
+    s.replaceSessionsFrom('/logs/alt.txt', 0, [snapshot({ startMs: 2_000_000 })], { guid: 'Player-2', name: 'Slouch-Mage-PvP-US' });
+    const metricId = s.addTrackedMetric({
+      addonFile: 'BagBrother.lua',
+      globalName: 'BrotherBags',
+      path: ['BrotherBags', 'forever', '*', 'money'],
+      label: 'Gold · Dead Sadfatkid',
+      unit: 'copper',
+      entity: 'Dead Sadfatkid',
+    });
+    s.recordSample({ metricId, tsMs: 1_000, value: 4200, instances: 1, minValue: null, maxValue: null, sourceFile: 'f', sourceMtimeMs: 1 });
+    const metric = findMetric(s, `tracked:${metricId}`)!;
+
+    // Unscoped and on the owner's page the value is there; the other character's page shows nothing,
+    // rather than one character's gold under another's name.
+    expect(cardData(s, metric, 0, Date.now(), null).latest).toBe(4200);
+    const owner = metricScope('Player-1', 'Dead-Sadfatkid-PvP-US', 'Player-1', []);
+    const other = metricScope('Player-2', 'Slouch-Mage-PvP-US', 'Player-2', []);
+    expect(cardData(s, metric, 0, Date.now(), owner).latest).toBe(4200);
+    expect(cardData(s, metric, 0, Date.now(), other).points).toHaveLength(0);
   });
 
   it('leaves tracked sets out of the catalogue: a set has no single number to chart', () => {

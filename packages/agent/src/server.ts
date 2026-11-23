@@ -35,7 +35,7 @@ import {
   renderCardBody,
   cardValuesFrom,
 } from './ui/pages/dashboard';
-import { DEFAULT_SIZE, cardData, createExampleDashboard, findMetric, isCardView, viewFits } from './ui/dashboardData';
+import { DEFAULT_SIZE, cardData, createExampleDashboard, findMetric, isCardView, metricScope, viewFits } from './ui/dashboardData';
 import { sampleTracked } from './tracking';
 import { listAddons, readAddon } from './addons';
 import { collectValues, entityOptions, pinEntity } from '../../core/src/savedvars/shape';
@@ -195,11 +195,17 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
       return;
     }
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${opts.port}`);
+    // The current page under a different character: everything but `char`, so the header switcher
+    // keeps you on the page you are on (a specific dashboard, say) when you pick someone else.
+    const scopeParams = new URLSearchParams(url.searchParams);
+    scopeParams.delete('char');
+    const scopeQuery = scopeParams.toString();
     const ctx: Ctx = {
       store,
       installs,
       lastScan: opts.lastScan(),
       dbPath: opts.dbPath,
+      path: url.pathname + (scopeQuery ? `?${scopeQuery}` : ''),
       ...resolveScope(store, url.searchParams.get('char')),
     };
     const redirect = (location: string): void => {
@@ -296,7 +302,13 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
                 cards: store.dashboardCards(id).map((card) => {
                   const metric = findMetric(store, card.metric);
                   if (!metric) return { ...card, metric: null, data: null };
-                  const data = cardData(store, metric, card.range_minutes, Date.now(), ctx.character);
+                  const data = cardData(
+                    store,
+                    metric,
+                    card.range_minutes,
+                    Date.now(),
+                    metricScope(ctx.character, ctx.characterName, ctx.characterGuid, ctx.installs),
+                  );
                   return {
                     ...card,
                     metric: {
@@ -857,7 +869,7 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
         }
 
         case '/runs':
-          body = renderRuns(ctx);
+          body = renderRuns(ctx, { kind: url.searchParams.get('kind') });
           break;
         case '/pvp':
           body = renderPvp(ctx);

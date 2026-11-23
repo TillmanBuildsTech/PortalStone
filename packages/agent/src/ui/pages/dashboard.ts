@@ -27,6 +27,7 @@ import {
   isCardView,
   isRange,
   metricCatalog,
+  metricScope,
   rangeLabel,
   viewFits,
   colorForUnit,
@@ -104,7 +105,7 @@ export function renderDashboards(ctx: Ctx): string {
          <div class="col" style="max-width:360px">${section('new dashboard', CREATE_FORM)}</div>
        </div>`;
 
-  return page('Dashboards', body, { active: 'dashboards', ctx });
+  return page('Dashboards', body, { active: 'dashboards', ctx, scope: true });
 }
 
 export function renderDashboard(ctx: Ctx, id: number): string | null {
@@ -166,6 +167,7 @@ export function renderDashboard(ctx: Ctx, id: number): string | null {
   return page(dashboard.name, body, {
     active: 'dashboards',
     ctx,
+    scope: true,
     styles: ['/vendor/gridstack/gridstack.min.css', '/assets/dashboard.css'],
     scripts: ['/vendor/gridstack/gridstack-all.js', '/assets/dashboard.js'],
   });
@@ -396,7 +398,13 @@ function previewCard(ctx: Ctx, values: CardFormValues): string {
 
   const view: CardView = isCardView(values.view) ? values.view : defaultView(metric.shape);
   const effective = viewFits(metric.shape, view) ? view : defaultView(metric.shape);
-  const data = cardData(ctx.store, metric, values.rangeMinutes, Date.now(), ctx.character);
+  const data = cardData(
+    ctx.store,
+    metric,
+    values.rangeMinutes,
+    Date.now(),
+    metricScope(ctx.character, ctx.characterName, ctx.characterGuid, ctx.installs),
+  );
   const title = values.title || metric.label;
   const tier = cardTier(values.w, values.h);
   return `<section class="dash-card preview-card size-${tier}${values.w >= 9 ? ' wide' : ''}" style="--preview-w:${values.w}">
@@ -472,7 +480,13 @@ function renderCardSection(ctx: Ctx, card: DashboardCardRow, w: number, h: numbe
   if (!metric) {
     body = `<div class="empty">This card reads <span class="mono">${esc(card.metric)}</span>, which no longer exists — the tracked value behind it was removed. Remove the card, or track a value again to give it a history.</div>`;
   } else {
-    const data = cardData(ctx.store, metric, range, Date.now(), ctx.character);
+    const data = cardData(
+      ctx.store,
+      metric,
+      range,
+      Date.now(),
+      metricScope(ctx.character, ctx.characterName, ctx.characterGuid, ctx.installs),
+    );
     body = `${coerced ? `<div class="notice warn" style="margin:8px 0">${esc(view)} does not fit a ${
       metric.shape === 'time' ? 'metric measured over time' : 'metric split into categories'
     } — showing ${esc(VIEWS.find((v) => v.id === effective)?.label ?? effective)} instead.</div>` : ''}

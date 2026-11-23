@@ -10,7 +10,7 @@
  */
 import { throughput } from '../../../../core/src/throughput';
 import { columnChart } from '../charts';
-import { cards, characterBar, emptyState, metas, page, section, table, withCharacter } from '../shell';
+import { cards, emptyState, metas, page, section, table, withCharacter } from '../shell';
 import { dateLabel, dur, esc, num, quantity, when } from '../format';
 import type { Ctx } from '../context';
 import { isCharacter } from '../../characters';
@@ -136,7 +136,6 @@ export function renderHome(ctx: Ctx): string {
       `first recorded ${when(totals.firstMs, tz)}`,
       !character && roster.length > 1 ? `${num(roster.length)} characters` : null,
     ])}
-    ${characterBar(ctx, '/')}
     ${
       character && trackedCards(ctx, character).length === 0
         ? `<div class="sub" style="margin-top:8px">No tracked value is tied to ${esc(ctx.characterName ?? character)} yet.
