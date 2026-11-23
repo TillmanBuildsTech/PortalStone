@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store';
 import { renderSession } from '../src/ui/pages/session';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot, AbilityStat, CastStat } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 import { sessionSpecLine, specForSession, specTitle } from '../src/ui/specInfo';
@@ -58,6 +58,7 @@ const HOLY: BagSnapshot = {
   topKills: [],
   pvpKills: [],
   pvpDeaths: [],
+  yourDeaths: [],
 };
 
 /** The same character after the respec: Seal of Command is talent-locked to Retribution. */
@@ -86,7 +87,7 @@ function sessionWith(zones: { name: string; kind: string; bag: BagSnapshot; star
 }
 
 function ctxFor(s: Store): Ctx {
-  return { store: s, installs: [], lastScan: { at: 0, entries: 0, errors: 0 }, dbPath: ':memory:', character: null, charQuery: '' };
+  return { store: s, installs: [], lastScan: { at: 0, entries: 0, errors: 0 }, dbPath: ':memory:', ...resolveScope(s, null) };
 }
 
 const T0 = Date.UTC(2026, 10, 15, 19, 25);

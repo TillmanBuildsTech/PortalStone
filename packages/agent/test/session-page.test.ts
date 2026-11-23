@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store';
 import { renderSession } from '../src/ui/pages/session';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 
@@ -50,6 +50,7 @@ function bag(over: Partial<BagSnapshot> = {}): BagSnapshot {
     topKills: [],
     pvpKills: [],
     pvpDeaths: [],
+    yourDeaths: [],
     ...over,
   };
 }
@@ -77,8 +78,7 @@ function ctxFor(s: Store, character: string | null = null): Ctx {
     installs: [],
     lastScan: { at: 0, entries: 0, errors: 0 },
     dbPath: ':memory:',
-    character,
-    charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+    ...resolveScope(s, character),
   };
 }
 
@@ -165,6 +165,81 @@ describe('session page: tracked values', () => {
     const html = renderSession(ctxFor(s), id)!;
     expect(html).toContain('sum of 2');
     expect(html).toContain('one per character');
+  });
+
+  it('persists your deaths and shows what killed you, grouped by killer and blow', () => {
+    const s = store();
+    const start = 1000;
+    const end = 5000;
+    const deaths = [
+      { ms: 2000, killer: 'Scarlet Centurion', killerGuid: null, killerPlayer: false, spell: 'Heroic Strike' },
+      { ms: 3000, killer: 'Scarlet Centurion', killerGuid: null, killerPlayer: false, spell: 'Heroic Strike' },
+      { ms: 4000, killer: 'unknown', killerGuid: null, killerPlayer: false, spell: 'Falling' },
+    ];
+    const stats = bag({ damageDone: 1000, durationS: 4, engagedS: 3, myDeaths: 3, yourDeaths: deaths });
+    const snap: SessionSnapshot = {
+      startMs: start,
+      endMs: end,
+      startByte: 0,
+      offsetMin: -420,
+      zoneId: 1,
+      zoneName: 'Scarlet Monastery',
+      zones: [{ zoneId: 1, name: 'Scarlet Monastery', kind: 'dungeon', startMs: start, endMs: end, ...stats }],
+      open: stats,
+      encounters: [],
+    };
+    const [id] = s.replaceSessionsFrom('/logs/d.txt', 0, [snap], { guid: 'P-1', name: 'Dead' });
+
+    // The store groups identical killer+blow and counts them.
+    const rows = s.deaths(id!);
+    expect(rows.find((r) => r.killer === 'Scarlet Centurion')!.n).toBe(2);
+    // Deaths resolve to the zone visit they fell in, for the run page.
+    const seg = s.segments(id!)[0]!;
+    expect(s.segmentDeaths(seg.id).reduce((sum, r) => sum + r.n, 0)).toBe(3);
+
+    const html = renderSession(ctxFor(s), id!)!;
+    expect(html).toContain('what killed you');
+    expect(html).toContain('Scarlet Centurion');
+    expect(html).toContain('×2');
+    expect(html).toContain('Falling'); // environmental death: no killer, blow names it
+  });
+
+  it('does not pretend a comparison exists for the first session of its kind', () => {
+    const s = store();
+    const id = seed(s);
+    const html = renderSession(ctxFor(s), id)!;
+    expect(html).toContain('how this session stacked up');
+    expect(html).toContain('Nothing to compare against yet');
+  });
+
+  it('shows where a session sat against your own history once there is history', () => {
+    const s = store();
+    // Four Scarlet Monastery nights on one character, with rising damage so rates differ.
+    const snaps = [1, 2, 3, 4].map((i) => {
+      const start = i * 100_000;
+      const stats = bag({ damageDone: i * 30_000, healingDone: 0, durationS: 100, engagedS: 100, fieldKills: i * 10 });
+      return {
+        startMs: start,
+        endMs: start + 100_000,
+        startByte: 0,
+        offsetMin: -420,
+        zoneId: 1,
+        zoneName: 'Scarlet Monastery',
+        zones: [{ zoneId: 1, name: 'Scarlet Monastery', kind: 'dungeon', startMs: start, endMs: start + 100_000, ...stats }],
+        open: stats,
+        encounters: [],
+      };
+    });
+    s.replaceSessionsFrom('/logs/b.txt', 0, snaps, { guid: 'P-9', name: 'Grind' });
+    const rows = s.listSessions(10, 'P-9');
+    const middle = rows.find((r) => r.damage_done === 90_000)!; // the i=3 night
+    const html = renderSession(ctxFor(s), middle.id)!;
+
+    expect(html).toContain('how this session stacked up');
+    expect(html).toContain('your median');
+    expect(html).toContain('your best');
+    expect(html).toContain('class="dist"'); // the dot plot rendered
+    expect(html).toContain('Scarlet Monastery session'); // basis disclosure names the zone
   });
 
   it('stops the after-session window at the next session', () => {

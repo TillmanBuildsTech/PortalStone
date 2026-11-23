@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store';
 import { renderPvp } from '../src/ui/pages/pvp';
-import type { Ctx } from '../src/ui/context';
+import { resolveScope, type Ctx } from '../src/ui/context';
 import type { BagSnapshot } from '../../core/src/combatlog/aggregate';
 import type { SessionSnapshot } from '../../core/src/combatlog/ingest';
 
@@ -57,6 +57,7 @@ function bag(over: Partial<BagSnapshot> = {}): BagSnapshot {
     topKills: [],
     pvpKills: [],
     pvpDeaths: [],
+    yourDeaths: [],
     ...over,
   };
 }
@@ -92,8 +93,7 @@ function ctxFor(s: Store, character: string | null = null): Ctx {
     installs: [],
     lastScan: { at: 0, entries: 0, errors: 0 },
     dbPath: ':memory:',
-    character,
-    charQuery: character ? `char=${encodeURIComponent(character)}` : '',
+    ...resolveScope(s, character),
   };
 }
 
@@ -148,9 +148,9 @@ describe('pvp store', () => {
       name: 'Slouch Mage',
     });
     expect(s.pvpSummary().kills).toBe(2);
-    expect(s.pvpSummary('Slouch Mage')).toMatchObject({ kills: 1, deaths: 0 });
-    expect(s.pvpOpponents('death', 'Slouch Mage')).toEqual([]);
-    expect(s.pvpOpponents('kill', 'Slouch Mage').map((k) => k.opponent_name)).toEqual(['Someone-Else-PvP-US']);
+    expect(s.pvpSummary('Player-2')).toMatchObject({ kills: 1, deaths: 0 });
+    expect(s.pvpOpponents('death', 'Player-2')).toEqual([]);
+    expect(s.pvpOpponents('kill', 'Player-2').map((k) => k.opponent_name)).toEqual(['Someone-Else-PvP-US']);
   });
 
   it('drops the pvp rows when the same session is re-read', () => {

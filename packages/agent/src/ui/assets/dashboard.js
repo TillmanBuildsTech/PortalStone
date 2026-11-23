@@ -66,7 +66,32 @@
     /**
      * A resize changes the space the chart has, so ask the server for the card at its new cell
      * size. The layout (pie key beside or below, label density, table rows) is chosen from w/h.
+     *
+     * Only the body is swapped. GridStack binds its drag listeners to the handle element it found
+     * when it set the card up, so replacing the whole card — handle included — leaves the new
+     * handle with no listeners and the card can never be dragged again. Keeping the header node
+     * alive keeps the card movable.
      */
+    const applyCard = (content, html) => {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = html.trim();
+      const fresh = tpl.content.querySelector('.dash-card');
+      const card = content.querySelector('.dash-card');
+      const freshBody = fresh && fresh.querySelector('.dash-body');
+      const body = card && card.querySelector('.dash-body');
+      if (!fresh || !card || !freshBody || !body) {
+        // Unexpected markup (a card type from an older page, say): fall back rather than show
+        // nothing, and accept that this card may need a reload to drag again.
+        content.innerHTML = html;
+        return;
+      }
+      body.innerHTML = freshBody.innerHTML;
+      card.className = fresh.className;
+      const view = fresh.getAttribute('data-view');
+      const pill = card.querySelector('.view-pill');
+      if (pill && view) pill.textContent = view;
+    };
+
     const rerender = async (el) => {
       const content = el && el.querySelector('.grid-stack-item-content');
       if (!content) return;
@@ -78,7 +103,7 @@
       try {
         const res = await fetch(`/dashboard/card/body?id=${id}&w=${w}&h=${h}`);
         if (!res.ok) return;
-        content.innerHTML = await res.text();
+        applyCard(content, await res.text());
       } catch {
         /* keep the old rendering rather than blanking the card */
       }

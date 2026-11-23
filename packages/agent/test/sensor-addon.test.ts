@@ -112,4 +112,20 @@ describe('PortalstoneSense addon', () => {
     const src = readFileSync(LUA_PATH, 'utf8');
     expect(src).toMatch(/InCombatLockdown\(\)/);
   });
+
+  it('holds combat logging on from the frame tick, guarded', () => {
+    const src = readFileSync(LUA_PATH, 'utf8');
+    expect(src).toMatch(/safe\(LoggingCombat, true\)/);
+    expect(src).toMatch(/SetScript\("OnUpdate", function\(\)[\s\S]*?holdCombatLog\(now\)/);
+  });
+
+  it('declares every local function before anything calls it', () => {
+    // A local referenced above its declaration is a nil global in Lua, and it fails only in game.
+    const src = readFileSync(LUA_PATH, 'utf8');
+    for (const [, name] of src.matchAll(/^local function (\w+)/gm)) {
+      const declared = src.indexOf(`local function ${name}(`);
+      const firstCall = src.search(new RegExp(`(?<![\\w.:])${name}\\(`));
+      expect({ name, ok: firstCall >= declared }).toEqual({ name, ok: true });
+    }
+  });
 });

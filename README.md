@@ -48,6 +48,10 @@ MVP is and how to test it, and `docs/SAVEDVARS.md` for how addon data is read an
     npm test                     # core + agent
     npm run typecheck            # core + agent
 
+    npm run build                # release build: dist/portalstone, runs on plain Node
+    npm run service:install      # install that build as a Windows service (admin; needs serv)
+                                 # see docs/SERVICE.md
+
     # configuration (all optional)
     #   PORTALSTONE_WOW_DIR        install folder, when discovery misses it
     #   PORTALSTONE_ITEM_API       base URL where GET /{id} returns {"name": "…"}

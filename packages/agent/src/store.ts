@@ -146,6 +146,23 @@ CREATE TABLE IF NOT EXISTS segment_ability (
   hits INTEGER NOT NULL DEFAULT 0
 );
 
+-- Your own deaths, one row each: who landed the finishing blow and with what. The count already
+-- lives on the session (my_deaths); this is what answers "what killed you", PvE and PvP alike.
+-- segment_id links the death to the zone visit it happened in, so the run page can show its own.
+CREATE TABLE IF NOT EXISTS death (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  segment_id INTEGER REFERENCES zone_segment(id) ON DELETE SET NULL,
+  ms INTEGER NOT NULL,
+  killer TEXT NOT NULL DEFAULT 'unknown',
+  killer_guid TEXT,
+  killer_player INTEGER NOT NULL DEFAULT 0,
+  spell TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_death_session ON death (session_id);
+CREATE INDEX IF NOT EXISTS idx_death_segment ON death (segment_id);
+
 -- A property the user chose to track, from any installed addon. The base adapter discovers what
 -- is available; these two tables are what turns one of those properties into a time series.
 CREATE TABLE IF NOT EXISTS tracked_metric (
@@ -325,6 +342,15 @@ export interface SegmentRow {
   character_name: string | null;
 }
 
+/** A grouped "what killed you" row: how many times this killer+blow ended you, and when last. */
+export interface DeathSummaryRow {
+  killer: string;
+  spell: string;
+  killer_player: number;
+  n: number;
+  last_ms: number;
+}
+
 export interface SessionRow {
   id: number;
   start_ms: number;
@@ -345,6 +371,7 @@ export interface SessionRow {
   players_died: number;
   casts: number;
   interrupts: number;
+  character_guid: string | null;
   character_name: string | null;
   zones: string | null;
   encounters: number;
@@ -353,6 +380,8 @@ export interface SessionRow {
 
 /** One character, with what every session of theirs added up to. */
 export interface CharacterRow {
+  /** what `?char=` carries and every scoped query filters on: see whoIs */
+  key: string;
   name: string;
   guid: string | null;
   sessions: number;
@@ -489,6 +518,28 @@ export interface Totals {
   lastMs: number | null;
 }
 
+/**
+ * A character's identity in SQL: the guid, or the name when the log never revealed a guid.
+ *
+ * Not the name alone. The log writes `Dead-Sadfatkid-PvP-US` with no realm in it, so two
+ * characters with one name on two realms are one name and two guids; grouping by name merged their
+ * sessions. The guid also carries the realm (`Player-6934-…`), so it is the one key that is unique.
+ */
+export function whoIs(alias = ''): string {
+  return `COALESCE(${alias}character_guid, ${alias}character_name)`;
+}
+
+/**
+ * Which account a SavedVariables path belongs to: `_forever_/LANC3RR1` for
+ * `…/_forever_/WTF/Account/LANC3RR1/SavedVariables/BagBrother.lua`. Keyed by flavor and account
+ * rather than the whole path, so the same account under a moved install is still one account.
+ */
+export function accountOf(sourceFile: string | null): string {
+  if (!sourceFile) return '';
+  const m = /[\\/]([^\\/]+)[\\/]WTF[\\/]Account[\\/]([^\\/]+)[\\/]SavedVariables[\\/]/i.exec(sourceFile);
+  return m ? `${m[1]}/${m[2]}` : dirname(sourceFile);
+}
+
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
@@ -496,7 +547,10 @@ export class Store {
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.path = path;
-    this.db = new DatabaseSync(path);
+    // Two processes can hold this file: the service, and `npm run mvp` or `--once` beside it. A
+    // write that meets the other's lock waits for it instead of failing at once with "database is
+    // locked" — every write here is one short transaction, so a few seconds is generous.
+    this.db = new DatabaseSync(path, { timeout: 5000 });
     this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec(SCHEMA);
@@ -587,6 +641,79 @@ export class Store {
     this.db.exec('DROP TABLE IF EXISTS camp_attendee');
     this.db.exec('DROP TABLE IF EXISTS camp_bag');
     this.db.exec('DROP TABLE IF EXISTS camp');
+    if (this.meta('samples_cross_account') === null) {
+      this.mergeAccountSamples();
+      this.setMeta('samples_cross_account', '1');
+    }
+  }
+
+  /**
+   * One-time repair of summed series recorded before sampling read every account.
+   *
+   * Each old sample was one account's total — whichever account had flushed last — so playing alts
+   * on two accounts drew a sawtooth between their totals. Every sample still names its source file,
+   * which names its account, so the true series is recoverable: at each flush, the total is that
+   * account's new value plus every other account's last known one. The original rows are copied to
+   * `tracked_sample_premerge` first, so nothing is lost.
+   */
+  private mergeAccountSamples(): void {
+    const metrics = this.db
+      .prepare("SELECT id FROM tracked_metric WHERE kind = 'number' AND entity IS NULL")
+      .all() as { id: number }[];
+    this.db.exec('BEGIN');
+    try {
+      for (const { id } of metrics) {
+        const rows = this.db
+          .prepare(
+            `SELECT rowid, ts_ms, value, instances, min_value, max_value, source_file
+               FROM tracked_sample WHERE metric_id = ? ORDER BY ts_ms, rowid`,
+          )
+          .all(id) as {
+          rowid: number;
+          ts_ms: number;
+          value: number;
+          instances: number;
+          min_value: number | null;
+          max_value: number | null;
+          source_file: string | null;
+        }[];
+        const accounts = new Set(rows.map((r) => accountOf(r.source_file)));
+        if (accounts.size < 2) continue;
+
+        this.db.exec('CREATE TABLE IF NOT EXISTS tracked_sample_premerge AS SELECT * FROM tracked_sample WHERE 0');
+        this.db.prepare('INSERT INTO tracked_sample_premerge SELECT * FROM tracked_sample WHERE metric_id = ?').run(id);
+
+        // Before an account's first observation, its first observed value stands in for it. That is
+        // exact for an account created mid-history (it starts at 0, as a fresh one does) and the best
+        // available estimate otherwise; dropping those points instead would erase all the history
+        // from before the second account existed.
+        const latest = new Map<string, (typeof rows)[number]>();
+        for (const row of rows) {
+          const key = accountOf(row.source_file);
+          if (!latest.has(key)) latest.set(key, row);
+        }
+        const update = this.db.prepare(
+          'UPDATE tracked_sample SET value = ?, instances = ?, min_value = ?, max_value = ? WHERE rowid = ?',
+        );
+        for (const row of rows) {
+          latest.set(accountOf(row.source_file), row);
+          const parts = [...latest.values()];
+          const mins = parts.map((p) => p.min_value ?? p.value);
+          const maxes = parts.map((p) => p.max_value ?? p.value);
+          update.run(
+            parts.reduce((a, p) => a + p.value, 0),
+            parts.reduce((a, p) => a + p.instances, 0),
+            Math.min(...mins),
+            Math.max(...maxes),
+            row.rowid,
+          );
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   close(): void {
@@ -720,6 +847,7 @@ export class Store {
         this.db.prepare('DELETE FROM session_ability WHERE session_id = ?').run(row.id);
         dropAbilities.run(row.id);
         this.db.prepare('DELETE FROM encounter WHERE session_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM death WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM zone_segment WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM session WHERE id = ?').run(row.id);
       }
@@ -779,6 +907,8 @@ export class Store {
         const insertSegmentAbility = this.db.prepare(
           'INSERT INTO segment_ability (segment_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
         );
+        // Zone visit time ranges, so each of your deaths can be tied to the run it happened in.
+        const segRanges: { startMs: number; endMs: number; id: number }[] = [];
         for (const z of s.zones) {
           const seg = insertSegment.run(
             id,
@@ -806,11 +936,21 @@ export class Store {
           // Per-run detail is what the run page drills into: the same ability breakdown the
           // session gets, kept against the zone visit it happened in.
           const segmentId = Number(seg.lastInsertRowid);
+          segRanges.push({ startMs: z.startMs, endMs: z.endMs, id: segmentId });
           for (const a of z.topAbilities) insertSegmentAbility.run(segmentId, 'damage', a.id, a.name, a.amount, a.hits);
           for (const a of z.topHealing) insertSegmentAbility.run(segmentId, 'healing', a.id, a.name, a.amount, a.hits);
           for (const a of z.topDamageTaken) insertSegmentAbility.run(segmentId, 'taken', a.id, a.name, a.amount, a.hits);
           // Casts keep the spell id, so two ranks of one spell stay two rows.
           for (const c of z.topCasts) insertSegmentAbility.run(segmentId, 'cast', c.id, c.name, c.casts, 0);
+        }
+        // Your deaths, from the session bag (the authority on the whole visit), each resolved to the
+        // zone it fell in. A death with no containing segment is still kept against the session.
+        const insertDeath = this.db.prepare(
+          'INSERT INTO death (session_id, segment_id, ms, killer, killer_guid, killer_player, spell) VALUES (?,?,?,?,?,?,?)',
+        );
+        for (const d of s.open.yourDeaths) {
+          const seg = segRanges.find((r) => d.ms >= r.startMs && d.ms <= r.endMs);
+          insertDeath.run(id, seg?.id ?? null, d.ms, d.killer || 'unknown', d.killerGuid, d.killerPlayer ? 1 : 0, d.spell || '');
         }
         const insertAbility = this.db.prepare(
           'INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
@@ -886,7 +1026,7 @@ export class Store {
   }
 
   listSessions(limit = 60, character: string | null = null): SessionRow[] {
-    const where = character ? 'WHERE s.character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs('s.')} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(
@@ -909,7 +1049,8 @@ export class Store {
   characters(): CharacterRow[] {
     return this.db
       .prepare(
-        `SELECT COALESCE(NULLIF(character_name, ''), 'unknown') AS name,
+        `SELECT COALESCE(character_guid, NULLIF(character_name, ''), 'unknown') AS key,
+                COALESCE(MAX(NULLIF(character_name, '')), 'unknown') AS name,
                 MAX(character_guid) AS guid,
                 COUNT(*) AS sessions,
                 MIN(start_ms) AS first_ms,
@@ -921,7 +1062,7 @@ export class Store {
                 COALESCE(SUM(kills), 0) AS kills,
                 COALESCE(SUM(my_deaths), 0) AS deaths
            FROM session
-         GROUP BY name
+         GROUP BY key
          ORDER BY last_ms DESC`,
       )
       .all() as unknown as CharacterRow[];
@@ -929,7 +1070,7 @@ export class Store {
 
   /** Headline PvP numbers, optionally for one character. */
   pvpSummary(character: string | null = null): PvpSummary {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character] : [];
     const row = this.db
       .prepare(
@@ -963,7 +1104,7 @@ export class Store {
     const clauses = ['direction = ?'];
     const args: (string | number)[] = [direction];
     if (character) {
-      clauses.push('character_name = ?');
+      clauses.push(`${whoIs()} = ?`);
       args.push(character);
     }
     args.push(limit);
@@ -989,7 +1130,7 @@ export class Store {
 
   /** The events themselves, newest first: the timeline behind the tables. */
   pvpEvents(character: string | null = null, limit = 200): PvpEventRow[] {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(`SELECT * FROM pvp_event ${where} ORDER BY ts_ms DESC LIMIT ?`)
@@ -1070,7 +1211,7 @@ export class Store {
    * would otherwise become the "median" you are measured against.
    */
   runsForZone(zoneName: string, limit = 200, character: string | null = null): SegmentRow[] {
-    const where = character ? 'zone_name = ? AND character_name = ?' : 'zone_name = ?';
+    const where = character ? `zone_name = ? AND ${whoIs()} = ?` : 'zone_name = ?';
     const args = character ? [zoneName, character, limit] : [zoneName, limit];
     return this.db
       .prepare(`SELECT * FROM zone_segment WHERE ${where} ORDER BY start_ms DESC LIMIT ?`)
@@ -1143,6 +1284,27 @@ export class Store {
       .all(sessionId) as unknown as Record<string, unknown>[];
   }
 
+  /** What killed you across a session, grouped by killer and finishing blow, most frequent first. */
+  deaths(sessionId: number): DeathSummaryRow[] {
+    return this.deathSummary('session_id', sessionId);
+  }
+
+  /** The same, for one zone visit — what the run page drills into. */
+  segmentDeaths(segmentId: number): DeathSummaryRow[] {
+    return this.deathSummary('segment_id', segmentId);
+  }
+
+  private deathSummary(column: 'session_id' | 'segment_id', id: number): DeathSummaryRow[] {
+    return this.db
+      .prepare(
+        `SELECT killer, spell, killer_player, COUNT(*) AS n, MAX(ms) AS last_ms
+           FROM death WHERE ${column} = ?
+           GROUP BY killer, spell, killer_player
+           ORDER BY n DESC, last_ms DESC`,
+      )
+      .all(id) as unknown as DeathSummaryRow[];
+  }
+
   /** Every zone visit in a session, in order: the runs. */
   segments(sessionId: number): SegmentRow[] {
     return this.db
@@ -1152,7 +1314,7 @@ export class Store {
 
   /** Recent runs across all sessions, newest first. Instances first in the UI's eyes. */
   recentRuns(limit = 60, character: string | null = null): SegmentRow[] {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     const args = character ? [character, limit] : [limit];
     return this.db
       .prepare(`SELECT * FROM zone_segment ${where} ORDER BY start_ms DESC LIMIT ?`)
@@ -1206,6 +1368,14 @@ export class Store {
       )
       .run(m.addonFile, m.globalName, pathJson, m.label, m.unit, kind, entity, Date.now());
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * Point a pinned series at a new key for the same character, keeping its history. For an addon
+   * that changed how it keys characters: a new metric would start the series over from nothing.
+   */
+  repinTrackedMetric(id: number, entity: string, label: string): void {
+    this.db.prepare('UPDATE tracked_metric SET entity = ?, label = ? WHERE id = ?').run(entity, label, id);
   }
 
   removeTrackedMetric(id: number): void {
@@ -1437,7 +1607,7 @@ export class Store {
       args.push(sinceMs);
     }
     if (character) {
-      clauses.push('character_name = ?');
+      clauses.push(`${whoIs()} = ?`);
       args.push(character);
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -1549,7 +1719,7 @@ export class Store {
   }
 
   totals(character: string | null = null): Totals {
-    const where = character ? 'WHERE character_name = ?' : '';
+    const where = character ? `WHERE ${whoIs()} = ?` : '';
     return this.db
       .prepare(
         `SELECT COUNT(*) AS sessions,

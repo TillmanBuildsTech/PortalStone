@@ -95,6 +95,8 @@ export interface SensorHistoryEntry {
 export interface SensorCharacter {
   /** the key the addon used: the character's display name, no realm */
   key: string;
+  /** the WTF account folder this character's file came from */
+  account: string;
   meta: SensorMeta;
   spec: SensorSpec | null;
   /** paper-doll numbers, only the ones this client could answer */
@@ -110,8 +112,12 @@ export interface SensorCharacter {
 }
 
 export interface SensorRead {
-  /** null when the addon has never been installed */
+  /** the most recently flushed copy; null when the addon has never been installed */
   file: AddonFile | null;
+  /** every account's copy, newest first */
+  files: AddonFile[];
+  /** accounts whose copy could not be read while another account's could, with the reason */
+  skipped: string[];
   state: 'ok' | 'missing' | 'empty' | 'unreadable';
   reason?: string;
   chars: SensorCharacter[];
@@ -184,7 +190,8 @@ function readSpec(char: LuaValue): SensorSpec | null {
 
 function readMeta(char: LuaValue, key: string): SensorMeta {
   return {
-    name: key,
+    // Schema 2 keys characters by name and realm; the display name is the one the addon recorded.
+    name: str(get(char, 'meta', 'name')) ?? key,
     realm: str(get(char, 'meta', 'realm')),
     guid: str(get(char, 'meta', 'guid')),
     class: str(get(char, 'meta', 'class')),
@@ -215,7 +222,7 @@ function readGear(char: LuaValue): SensorGear | null {
   return { ilvl: num(get(gear, 'ilvl')), equipped: num(get(gear, 'equipped')), slots };
 }
 
-function readCharacter(key: string, char: LuaValue): SensorCharacter {
+function readCharacter(key: string, char: LuaValue, account: string): SensorCharacter {
   const professions: SensorProfession[] = [];
   for (const [, p] of entries(get(char, 'professions'))) {
     if (!isTable(p)) continue;
@@ -263,6 +270,7 @@ function readCharacter(key: string, char: LuaValue): SensorCharacter {
 
   return {
     key,
+    account,
     meta: readMeta(char, key),
     spec: readSpec(char),
     stats: numericLeaves(char, 'stats'),
@@ -284,37 +292,53 @@ function readCharacter(key: string, char: LuaValue): SensorCharacter {
   };
 }
 
-/** Every character the sensor has written, newest flush first. */
+/**
+ * Every character the sensor has written, across every account, newest flush first.
+ *
+ * The addon's SavedVariables are per account, so alts on two Battle.net accounts live in two
+ * files. Reading only the newest one made the other account's characters vanish from the page
+ * whenever you switched, so each file is read and its characters tagged with the account.
+ */
 export function readSensor(installs: InstallInfo[]): SensorRead {
-  const file = listAddons(installs).find((f) => f.file.toLowerCase() === SENSOR_FILE.toLowerCase());
-  if (!file) return { file: null, state: 'missing', chars: [], warnings: [] };
-
-  const read = readAddon(file);
-  if (read.state === 'empty') {
-    return { file, state: 'empty', reason: read.reason, chars: [], warnings: read.warnings };
-  }
-  if (read.state !== 'ok') {
-    return { file, state: 'unreadable', reason: read.reason, chars: [], warnings: read.warnings };
-  }
-
-  const global = read.globals.find((g) => g.name === SENSOR_GLOBAL);
-  if (!global || !isTable(global.value)) {
-    return {
-      file,
-      state: 'unreadable',
-      reason: `the file has no ${SENSOR_GLOBAL} table`,
-      chars: [],
-      warnings: read.warnings,
-    };
-  }
+  const files = listAddons(installs).filter((f) => f.file.toLowerCase() === SENSOR_FILE.toLowerCase());
+  if (files.length === 0) return { file: null, files: [], skipped: [], state: 'missing', chars: [], warnings: [] };
 
   const chars: SensorCharacter[] = [];
-  for (const [key, value] of entries(get(global.value, 'chars'))) {
-    if (!isTable(value)) continue;
-    chars.push(readCharacter(String(key), value));
+  const warnings: string[] = [];
+  const failures: { state: 'empty' | 'unreadable'; reason: string }[] = [];
+  for (const file of files) {
+    const read = readAddon(file);
+    warnings.push(...read.warnings);
+    if (read.state === 'empty') {
+      failures.push({ state: 'empty', reason: read.reason ?? 'empty' });
+      continue;
+    }
+    if (read.state !== 'ok') {
+      failures.push({ state: 'unreadable', reason: `account ${file.account}: ${read.reason ?? read.state}` });
+      continue;
+    }
+    const global = read.globals.find((g) => g.name === SENSOR_GLOBAL);
+    if (!global || !isTable(global.value)) {
+      failures.push({ state: 'unreadable', reason: `account ${file.account}: the file has no ${SENSOR_GLOBAL} table` });
+      continue;
+    }
+    for (const [key, value] of entries(get(global.value, 'chars'))) {
+      if (!isTable(value)) continue;
+      chars.push(readCharacter(String(key), value, file.account));
+    }
   }
+
+  // listAddons is newest first, so this is the most recent flush of any account.
+  const file = files[0]!;
   chars.sort((a, b) => (b.meta.updatedMs ?? 0) - (a.meta.updatedMs ?? 0));
-  return { file, state: 'ok', chars, warnings: read.warnings };
+  if (chars.length === 0 && failures.length === files.length) {
+    // Nothing usable anywhere: report the worst state, so a broken file is not shown as "empty".
+    const bad = failures.find((f) => f.state === 'unreadable') ?? failures[0]!;
+    return { file, files, skipped: [], state: bad.state, reason: bad.reason, chars, warnings };
+  }
+  // One account readable and another broken still shows what can be shown, with the reason kept.
+  const skipped = failures.filter((f) => f.state === 'unreadable').map((f) => f.reason);
+  return { file, files, skipped, state: 'ok', chars, warnings };
 }
 
 // ------------------------------------------------------------- tracked data ---
@@ -329,6 +353,7 @@ export function readSensor(installs: InstallInfo[]): SensorRead {
  * would only ever show one point per change.
  */
 const SEEDED: { path: string[]; label: (name: string) => string; unit: string }[] = [
+  // Labels use the character's name, not the storage key: `Played · Dead`, not the realm too.
   { path: ['chars', '*', 'gear', 'ilvl'], label: (n) => `Item level · ${n}`, unit: 'plain' },
   { path: ['chars', '*', 'played', 'total'], label: (n) => `Played · ${n}`, unit: 'seconds' },
   { path: ['chars', '*', 'xp', 'current'], label: (n) => `XP · ${n}`, unit: 'plain' },
@@ -344,16 +369,32 @@ const SEEDED: { path: string[]; label: (name: string) => string; unit: string }[
 export function ensureSensorMetrics(store: Store, read: SensorRead): string[] {
   if (read.state !== 'ok') return [];
   const added: string[] = [];
+  const keys = new Set(read.chars.map((c) => c.key));
   for (const char of read.chars) {
     for (const seed of SEEDED) {
-      const existing = store.trackedMetrics().find(
-        (m) =>
-          m.addon_file === SENSOR_FILE &&
-          m.entity === char.key &&
-          m.global_name === SENSOR_GLOBAL &&
-          m.path === JSON.stringify(seed.path),
-      );
-      const label = seed.label(char.key);
+      const seriesFor = (entity: string) =>
+        store.trackedMetrics().find(
+          (m) =>
+            m.addon_file === SENSOR_FILE &&
+            m.entity === entity &&
+            m.global_name === SENSOR_GLOBAL &&
+            m.path === JSON.stringify(seed.path),
+        );
+      const label = seed.label(char.meta.name);
+      let existing = seriesFor(char.key);
+      // Schema 1 keyed a character by name alone; schema 2 adds the realm. When the addon moves a
+      // character to its new key, the series seeded under the old one is that character's history,
+      // so it follows the character — unless something still answers to the old key, or two
+      // characters now carry that name and the old series cannot say which one it was.
+      const movable =
+        char.key !== char.meta.name &&
+        !keys.has(char.meta.name) &&
+        read.chars.filter((c) => c.meta.name === char.meta.name).length === 1;
+      const legacy = movable ? seriesFor(char.meta.name) : undefined;
+      if (!existing && legacy) {
+        store.repinTrackedMetric(legacy.id, char.key, label);
+        existing = legacy;
+      }
       store.addTrackedMetric({
         addonFile: SENSOR_FILE,
         globalName: SENSOR_GLOBAL,

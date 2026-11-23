@@ -44,3 +44,19 @@ export function sameCharacter(entity: string, character: string | null | undefin
   if (!a) return false;
   return a === normalizedCharacter(character);
 }
+
+/**
+ * Is this addon character the scoped one?
+ *
+ * The guid decides whenever both sides have one: the sensor records it, the log always does, and it
+ * is the only join that survives names that differ between sources — this server's log writes
+ * `Dead-Sadfatkid-PvP-US` where the client's UnitName says `Dead`. Without a guid (BagBrother keeps
+ * none) the name heuristic above is all there is.
+ */
+export function isCharacter(
+  scoped: { name: string | null; guid: string | null },
+  candidate: { name: string; guid: string | null },
+): boolean {
+  if (scoped.guid && candidate.guid) return scoped.guid === candidate.guid;
+  return sameCharacter(candidate.name, scoped.name);
+}

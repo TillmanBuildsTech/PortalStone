@@ -287,9 +287,9 @@ export function characterBar(ctx: Ctx, base: string): string {
   for (const c of roster) {
     parts.push(
       chip(
-        withCharacter(base, c.name),
+        withCharacter(base, c.key),
         c.name,
-        ctx.character === c.name,
+        ctx.character === c.key,
         `${c.name} · ${c.sessions} session${c.sessions === 1 ? '' : 's'} · last played ${ago(c.last_ms)}`,
       ),
     );

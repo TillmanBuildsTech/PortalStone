@@ -289,8 +289,29 @@ export class Bag {
       topKills: counted(this.killedNames, 5),
       pvpKills: [...this.pvpKills],
       pvpDeaths: [...this.pvpDeaths],
+      // Only your own deaths: who landed the finishing blow and with what, so the page can say
+      // "what killed you" rather than only how many times. Other players' deaths are field deaths,
+      // counted but not named here. Deaths are rare, so the whole list is kept, not a top-N.
+      yourDeaths: this.deathLog
+        .filter((d) => d.mine)
+        .map((d) => ({
+          ms: d.ms,
+          killer: d.killer,
+          killerGuid: d.killerGuid,
+          killerPlayer: d.killerPlayer,
+          spell: d.spell,
+        })),
     };
   }
+}
+
+/** Your own death: the finishing blow, for the "what killed you" summary. */
+export interface YourDeath {
+  ms: number;
+  killer: string;
+  killerGuid: string | null;
+  killerPlayer: boolean;
+  spell: string;
 }
 
 export interface BagSnapshot {
@@ -325,6 +346,8 @@ export interface BagSnapshot {
   /** player-versus-player: who you killed, and who killed you, one record per event */
   pvpKills: PvpRecord[];
   pvpDeaths: PvpRecord[];
+  /** your own deaths, each with the finishing blow — PvE and PvP alike */
+  yourDeaths: YourDeath[];
 }
 
 export interface EncounterResult {

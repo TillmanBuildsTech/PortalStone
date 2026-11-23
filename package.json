@@ -8,6 +8,8 @@
   "scripts": {
     "test": "npm -w @portalstone/core test && npm -w @portalstone/agent test",
     "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/agent/tsconfig.json --noEmit",
+    "build": "node scripts/build-release.mjs",
+    "service:install": "node scripts/install-service.mjs",
     "agent": "tsx packages/agent/src/main.ts",
     "mvp": "tsx packages/agent/src/main.ts --open",
     "scan": "tsx packages/agent/src/main.ts --once",
@@ -16,9 +18,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
     "luaparse": "^0.3.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wasmoon": "^1.16.0"
   }
 }

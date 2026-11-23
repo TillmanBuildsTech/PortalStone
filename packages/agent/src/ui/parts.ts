@@ -4,9 +4,9 @@
  * The ability table merges by name on purpose: spell ranks share a name (Holy Light appears twice
  * with separate ids), and a player recognises one line per spell. The ids stay in the store.
  */
-import type { AbilityRow } from '../store';
+import type { AbilityRow, DeathSummaryRow } from '../store';
 import { meter } from './charts';
-import { esc, num, pct } from './format';
+import { esc, num, pct, when } from './format';
 import { section } from './shell';
 
 export interface AbilityTableOptions {
@@ -97,6 +97,35 @@ export function castsByRankTable(opts: {
 
   return `<div class="scroll"><table><thead><tr><th class="l">spell</th><th>id</th><th>casts</th>
     <th>share of spell</th><th>avg</th></tr></thead><tbody>${body.join('')}</tbody></table></div>`;
+}
+
+/**
+ * What killed you — grouped by killer and finishing blow.
+ *
+ * The log names only the last hit, so a hunter's pet or a fall is what shows; it is the honest
+ * answer to "what killed you", not a full recap of the seconds before (the log is aggregated to
+ * counts, so those seconds are not kept). Empty renders nothing: a deathless session says nothing
+ * rather than an empty table.
+ */
+export function deathSummary(rows: DeathSummaryRow[], offsetMin: number): string {
+  if (rows.length === 0) return '';
+  const total = rows.reduce((sum, r) => sum + r.n, 0);
+  const body = rows.map((r) => {
+    const killer = r.killer && r.killer !== 'unknown' ? esc(r.killer) : '<span class="sub">unknown</span>';
+    const player = r.killer_player ? ' <span class="pill">player</span>' : '';
+    return `<tr>
+      <td class="l">${killer}${player}</td>
+      <td>${r.n > 1 ? `×${num(r.n)}` : num(r.n)}</td>
+      <td>${r.spell ? esc(r.spell) : '<span class="sub">—</span>'}</td>
+      <td>${when(r.last_ms, offsetMin)}</td>
+    </tr>`;
+  });
+  return section(
+    'what killed you',
+    `<div class="scroll"><table><thead><tr><th class="l">killer</th><th>deaths</th>
+      <th>finishing blow</th><th>last</th></tr></thead><tbody>${body.join('')}</tbody></table></div>`,
+    `${num(total)} death${total === 1 ? '' : 's'} · the last hit on you — a pet or a fall can land it, so it is the finisher, not the whole story`,
+  );
 }
 
 /** "Judgement of Fury 41%" — the one-line answer under a headline number. */
