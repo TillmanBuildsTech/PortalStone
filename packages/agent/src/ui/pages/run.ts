@@ -5,12 +5,13 @@
  * produced it, what hit back, and how it compares with your other runs in the same place. The
  * comparison is the part only this app can offer, because it has every run you have ever logged.
  */
-import { distribution } from '../charts';
+import { columnChart, distribution } from '../charts';
 import { cards, kindPill, metas, page, section, specPill } from '../shell';
-import { compact, dur, esc, num, pct, when } from '../format';
+import { compact, dateLabel, dur, esc, num, pct, when } from '../format';
 import { abilityTable, castsByRankTable, deathSummary } from '../parts';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
+import { runTrend } from './runCompare';
 import { specEvidenceText, specForRun, specTitle } from '../specInfo';
 
 export function renderRun(ctx: Ctx, id: number): string | null {
@@ -37,12 +38,63 @@ export function renderRun(ctx: Ctx, id: number): string | null {
   const others = store
     .runsForZone(seg.zone_name, 200, seg.character_guid ?? seg.character_name)
     .filter((r) => r.id !== seg.id)
-    .map((r) => throughputFrom(r));
-  const comparable = others.filter((o) => o.kind === t.kind && o.rate > 0 && o.total > 0);
-  const rates = comparable.map((o) => o.rate).sort((a, b) => a - b);
+    .map((r) => ({ row: r, t: throughputFrom(r) }));
+  // Only runs that led with the same metric and actually fought are one measurement with this one.
+  const comparable = others.filter(({ t: o }) => o.kind === t.kind && o.rate > 0 && o.total > 0);
+  const rates = comparable.map(({ t: o }) => o.rate).sort((a, b) => a - b);
   const median = rates.length ? rates[Math.floor(rates.length / 2)]! : 0;
   const best = rates.length ? rates[rates.length - 1]! : 0;
   const unit = t.kind === 'healing' ? 'hps' : 'dps';
+  const verb = t.kind === 'healing' ? 'more healing than' : 'faster than';
+
+  // Percentile and the over-time trend: the two things the median alone cannot say.
+  const trend = runTrend(
+    { startMs: seg.start_ms, rate: t.rate, id: seg.id },
+    comparable.map(({ row, t: o }) => ({ startMs: row.start_ms, rate: o.rate, id: row.id })),
+  );
+  const pctSentence =
+    trend.percentile === null
+      ? `${t.rate >= median ? 'above' : 'below'} your median`
+      : `${t.rate >= median ? 'above' : 'below'} your median, ${verb} ${Math.round(trend.percentile * 100)}% of them`;
+
+  // The trend chart and verdict, only once there is enough history for a direction to mean anything.
+  const trendBlock =
+    trend.trend === null
+      ? ''
+      : (() => {
+          const { direction, earlierMedian, laterMedian } = trend.trend;
+          const word =
+            direction === 'up'
+              ? t.kind === 'healing'
+                ? 'climbing'
+                : 'speeding up'
+              : direction === 'down'
+                ? t.kind === 'healing'
+                  ? 'slipping'
+                  : 'slowing down'
+                : 'holding steady';
+          const verdict =
+            direction === 'flat'
+              ? `Your rate here is <strong>holding steady</strong> — recent runs around ${num(laterMedian)} ${unit}, about where they were.`
+              : `Your rate here is <strong>${word}</strong> — the later half of your runs median ${num(
+                  laterMedian,
+                )} ${unit} against ${num(earlierMedian)} ${unit} earlier.`;
+          return `<div style="margin-top:14px">
+             ${columnChart(
+               trend.series.map((p) => ({
+                 label: dateLabel(p.startMs, session?.offset_min ?? 0),
+                 value: p.rate,
+                 kind: t.kind,
+                 href: `/run?id=${p.id}`,
+                 title: `${dateLabel(p.startMs, session?.offset_min ?? 0)}: ${num(p.rate)} ${unit}${
+                   p.isCurrent ? ' · this run' : ''
+                 }`,
+               })),
+               { caption: `${t.kind} per second here over time`, height: 150, unit: ` ${unit}` },
+             )}
+             <div class="sub">one bar per run here, oldest left; this run is the last. ${verdict}</div>
+           </div>`;
+        })();
 
   const compare =
     comparable.length === 0
@@ -59,16 +111,15 @@ export function renderRun(ctx: Ctx, id: number): string | null {
            </div>
            <div class="col" style="min-width:260px">
              ${distribution(
-               [...comparable.map((o) => ({ value: o.rate, title: `${num(o.rate)} ${unit}` })), { value: t.rate }],
+               [...comparable.map(({ t: o }) => ({ value: o.rate, title: `${num(o.rate)} ${unit}` })), { value: t.rate }],
                {
                  current: comparable.length,
                  format: (n) => `${compact(n)} ${unit}`,
                },
              )}
-             <div class="sub">each dot is one run in this zone; yours is highlighted — ${
-               t.rate >= median ? 'above' : 'below'
-             } your median.</div>
-           </div></div>`,
+             <div class="sub">each dot is one run in this zone; yours is highlighted — ${pctSentence}.</div>
+           </div></div>
+           ${trendBlock}`,
           `${comparable.length} other run${comparable.length === 1 ? '' : 's'} of this zone logged${
             seg.character_name ? ` on ${seg.character_name}` : ''
           }`,
