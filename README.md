@@ -41,7 +41,8 @@ MVP is and how to test it, and `docs/SAVEDVARS.md` for how addon data is read an
     #   /dashboards  your own views: draggable, resizable, editable cards over
     #                chosen data, chart type and time window (minutes → days)
     #   /addons    installed addons and what they expose    /addon?f=  property browser
-    #   /tracked   properties you chose to track            /bags  /diagnostics
+    #   /tracked   properties you chose to track            /diagnostics
+    #              bag drops live as dashboard metrics (by zone, by player)
     npm run scan                 # one pass, no server
     npm run rebuild              # re-derive everything from raw logs (after a parser change)
 

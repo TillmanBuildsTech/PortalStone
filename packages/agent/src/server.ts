@@ -21,7 +21,6 @@ import { renderSession } from './ui/pages/session';
 import { renderRun } from './ui/pages/run';
 import { renderRuns } from './ui/pages/runs';
 import { renderPvp } from './ui/pages/pvp';
-import { renderBags } from './ui/pages/bags';
 import { renderDiagnostics } from './ui/pages/diagnostics';
 import { renderAddons } from './ui/pages/addons';
 import { renderSensor } from './ui/pages/sensor';
@@ -862,9 +861,6 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
           break;
         case '/pvp':
           body = renderPvp(ctx);
-          break;
-        case '/bags':
-          body = renderBags(ctx);
           break;
         case '/diagnostics':
           body = renderDiagnostics(ctx);

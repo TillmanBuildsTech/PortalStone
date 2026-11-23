@@ -8,7 +8,8 @@ Tracked: **bag drops**. Nothing about who shared a bag, because the log does not
 the caster's name, the timestamp, and (from the stat block every cast line carries) the position
 `x, y, mapId`. The zone is whatever `ZONE_CHANGE` last reported at that moment.
 
-That is the whole feature: who dropped a bag, where, and when. `npm run rebuild`, then `/bags`.
+That is the whole feature: who dropped a bag, where, and when. `npm run rebuild`, then add a
+**bag drops by zone** or **bag drops by player** card to any dashboard.
 
 ## What is not recorded, and why
 
@@ -28,5 +29,5 @@ is foot traffic, not bag-mates. Guessing at that is worse than saying nothing.
 
 - `packages/core/src/bags.ts` — `BagCollector`: drops only, stamped with the zone in effect.
 - `packages/core/src/combatlog/decode.ts` — `BAG_SPELL`, and the position block reader.
-- `packages/agent/src/store.ts` — `bag_drop` table, rebuilt per log file.
-- `packages/agent/src/server.ts` — `/bags`: who drops, where, and every drop with position.
+- `packages/agent/src/store.ts` — `bag_drop` table, rebuilt per log file; `bagDropStats` feeds the metrics.
+- `packages/agent/src/ui/dashboardData.ts` — the `bags` metric group: drops by zone and by player, for any dashboard card.

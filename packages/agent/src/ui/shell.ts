@@ -12,7 +12,6 @@ export type NavKey =
   | 'dashboards'
   | 'runs'
   | 'pvp'
-  | 'bags'
   | 'addons'
   | 'sensor'
   | 'tracked'
@@ -23,7 +22,6 @@ const NAV: { key: NavKey; href: string; label: string }[] = [
   { key: 'dashboards', href: '/dashboards', label: 'dashboards' },
   { key: 'runs', href: '/runs', label: 'runs' },
   { key: 'pvp', href: '/pvp', label: 'pvp' },
-  { key: 'bags', href: '/bags', label: 'bags' },
   { key: 'addons', href: '/addons', label: 'addons' },
   { key: 'sensor', href: '/sensor', label: 'sensor' },
   { key: 'tracked', href: '/tracked', label: 'tracked' },
