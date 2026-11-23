@@ -6,8 +6,6 @@
  */
 import { ago, dur, esc, num, plural } from './format';
 import type { Ctx } from './context';
-import { isCharacter } from '../characters';
-import { readSensor } from '../sensor';
 
 export type NavKey =
   | 'sessions'
@@ -421,30 +419,21 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
  * `base` is the current page with `char` stripped; each option appends the character's identity key
  * to it, so switching keeps you on the same page.
  *
- * The label names the WoW account only when there is more than one to tell apart. Combat logs never
- * record an account, so a character is matched to its account through the sensor addon (which does),
- * by the same guid-or-name rule the rest of the app uses; a character the sensor has not seen simply
- * shows without an account prefix.
+ * Options show the character's name alone for now. The combat log never records a WoW account, so
+ * distinguishing alts on two accounts would mean joining to the sensor addon — left out until it is
+ * worth it.
  */
 export function scopeSwitcher(ctx: Ctx, base: string): string {
   const roster = ctx.store.characters();
   if (roster.length < 2) return '';
 
-  const sensor = readSensor(ctx.installs);
-  const accountOf = (c: { name: string; guid: string | null }): string | null =>
-    sensor.chars.find((sc) => isCharacter(c, { name: sc.meta.name, guid: sc.meta.guid }))?.account ?? null;
-  const accounts = roster.map(accountOf);
-  const showAccount = new Set(accounts.filter((a): a is string => a !== null)).size >= 2;
-
   const option = (value: string, label: string, on: boolean): string =>
     `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
 
-  const options = [option(base, 'all characters', ctx.character === null)];
-  roster.forEach((c, i) => {
-    const account = accounts[i];
-    const label = showAccount && account ? `${account} · ${c.name}` : c.name;
-    options.push(option(withCharacter(base, c.key), label, ctx.character === c.key));
-  });
+  const options = [
+    option(base, 'all characters', ctx.character === null),
+    ...roster.map((c) => option(withCharacter(base, c.key), c.name, ctx.character === c.key)),
+  ];
 
   return `<label class="who"><span class="who-label">character</span>
     <select aria-label="filter by character" onchange="if(this.value)location.href=this.value">${options.join(
