@@ -8,7 +8,7 @@
 import { distribution } from '../charts';
 import { cards, kindPill, metas, page, section, specPill } from '../shell';
 import { compact, dur, esc, num, pct, when } from '../format';
-import { abilityTable, castsByRankTable } from '../parts';
+import { abilityTable, castsByRankTable, deathSummary } from '../parts';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
 import { specEvidenceText, specForRun, specTitle } from '../specInfo';
@@ -141,6 +141,7 @@ export function renderRun(ctx: Ctx, id: number): string | null {
       { k: 'casts', v: num(seg.casts) },
     ])}
     ${compare}
+    ${deathSummary(store.segmentDeaths(seg.id), session?.offset_min ?? 0)}
     ${abilitySections}
     <div class="pager">
       <span>${prev ? `<a href="/run?id=${prev.id}">← ${esc(prev.zone_name)}</a>` : ''}</span>

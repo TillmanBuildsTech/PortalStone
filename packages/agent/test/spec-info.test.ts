@@ -58,6 +58,7 @@ const HOLY: BagSnapshot = {
   topKills: [],
   pvpKills: [],
   pvpDeaths: [],
+  yourDeaths: [],
 };
 
 /** The same character after the respec: Seal of Command is talent-locked to Retribution. */

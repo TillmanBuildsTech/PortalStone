@@ -302,7 +302,9 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
             status = 400;
             body = page('Bad request', '<h1>400</h1><p>session id required.</p>', { active: 'sessions' });
           } else {
-            const html = renderSession(ctx, id);
+            const basisParam = url.searchParams.get('basis');
+            const basis = basisParam === 'zone' || basisParam === 'all' ? basisParam : null;
+            const html = renderSession(ctx, id, { basis });
             if (html === null) {
               status = 404;
               body = notFound(`No session ${id}.`);

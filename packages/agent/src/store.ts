@@ -146,6 +146,23 @@ CREATE TABLE IF NOT EXISTS segment_ability (
   hits INTEGER NOT NULL DEFAULT 0
 );
 
+-- Your own deaths, one row each: who landed the finishing blow and with what. The count already
+-- lives on the session (my_deaths); this is what answers "what killed you", PvE and PvP alike.
+-- segment_id links the death to the zone visit it happened in, so the run page can show its own.
+CREATE TABLE IF NOT EXISTS death (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  segment_id INTEGER REFERENCES zone_segment(id) ON DELETE SET NULL,
+  ms INTEGER NOT NULL,
+  killer TEXT NOT NULL DEFAULT 'unknown',
+  killer_guid TEXT,
+  killer_player INTEGER NOT NULL DEFAULT 0,
+  spell TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_death_session ON death (session_id);
+CREATE INDEX IF NOT EXISTS idx_death_segment ON death (segment_id);
+
 -- A property the user chose to track, from any installed addon. The base adapter discovers what
 -- is available; these two tables are what turns one of those properties into a time series.
 CREATE TABLE IF NOT EXISTS tracked_metric (
@@ -323,6 +340,15 @@ export interface SegmentRow {
   /** whose run this is: the run page compares only this character's own runs */
   character_guid: string | null;
   character_name: string | null;
+}
+
+/** A grouped "what killed you" row: how many times this killer+blow ended you, and when last. */
+export interface DeathSummaryRow {
+  killer: string;
+  spell: string;
+  killer_player: number;
+  n: number;
+  last_ms: number;
 }
 
 export interface SessionRow {
@@ -821,6 +847,7 @@ export class Store {
         this.db.prepare('DELETE FROM session_ability WHERE session_id = ?').run(row.id);
         dropAbilities.run(row.id);
         this.db.prepare('DELETE FROM encounter WHERE session_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM death WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM zone_segment WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM session WHERE id = ?').run(row.id);
       }
@@ -880,6 +907,8 @@ export class Store {
         const insertSegmentAbility = this.db.prepare(
           'INSERT INTO segment_ability (segment_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
         );
+        // Zone visit time ranges, so each of your deaths can be tied to the run it happened in.
+        const segRanges: { startMs: number; endMs: number; id: number }[] = [];
         for (const z of s.zones) {
           const seg = insertSegment.run(
             id,
@@ -907,11 +936,21 @@ export class Store {
           // Per-run detail is what the run page drills into: the same ability breakdown the
           // session gets, kept against the zone visit it happened in.
           const segmentId = Number(seg.lastInsertRowid);
+          segRanges.push({ startMs: z.startMs, endMs: z.endMs, id: segmentId });
           for (const a of z.topAbilities) insertSegmentAbility.run(segmentId, 'damage', a.id, a.name, a.amount, a.hits);
           for (const a of z.topHealing) insertSegmentAbility.run(segmentId, 'healing', a.id, a.name, a.amount, a.hits);
           for (const a of z.topDamageTaken) insertSegmentAbility.run(segmentId, 'taken', a.id, a.name, a.amount, a.hits);
           // Casts keep the spell id, so two ranks of one spell stay two rows.
           for (const c of z.topCasts) insertSegmentAbility.run(segmentId, 'cast', c.id, c.name, c.casts, 0);
+        }
+        // Your deaths, from the session bag (the authority on the whole visit), each resolved to the
+        // zone it fell in. A death with no containing segment is still kept against the session.
+        const insertDeath = this.db.prepare(
+          'INSERT INTO death (session_id, segment_id, ms, killer, killer_guid, killer_player, spell) VALUES (?,?,?,?,?,?,?)',
+        );
+        for (const d of s.open.yourDeaths) {
+          const seg = segRanges.find((r) => d.ms >= r.startMs && d.ms <= r.endMs);
+          insertDeath.run(id, seg?.id ?? null, d.ms, d.killer || 'unknown', d.killerGuid, d.killerPlayer ? 1 : 0, d.spell || '');
         }
         const insertAbility = this.db.prepare(
           'INSERT INTO session_ability (session_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
@@ -1243,6 +1282,27 @@ export class Store {
     return this.db
       .prepare('SELECT * FROM encounter WHERE session_id = ? ORDER BY start_ms')
       .all(sessionId) as unknown as Record<string, unknown>[];
+  }
+
+  /** What killed you across a session, grouped by killer and finishing blow, most frequent first. */
+  deaths(sessionId: number): DeathSummaryRow[] {
+    return this.deathSummary('session_id', sessionId);
+  }
+
+  /** The same, for one zone visit — what the run page drills into. */
+  segmentDeaths(segmentId: number): DeathSummaryRow[] {
+    return this.deathSummary('segment_id', segmentId);
+  }
+
+  private deathSummary(column: 'session_id' | 'segment_id', id: number): DeathSummaryRow[] {
+    return this.db
+      .prepare(
+        `SELECT killer, spell, killer_player, COUNT(*) AS n, MAX(ms) AS last_ms
+           FROM death WHERE ${column} = ?
+           GROUP BY killer, spell, killer_player
+           ORDER BY n DESC, last_ms DESC`,
+      )
+      .all(id) as unknown as DeathSummaryRow[];
   }
 
   /** Every zone visit in a session, in order: the runs. */

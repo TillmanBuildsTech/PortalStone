@@ -57,6 +57,7 @@ function bag(over: Partial<BagSnapshot> = {}): BagSnapshot {
     topKills: [],
     pvpKills: [],
     pvpDeaths: [],
+    yourDeaths: [],
     ...over,
   };
 }

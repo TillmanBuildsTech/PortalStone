@@ -5,17 +5,18 @@
  * the same thing numerically, each row a link into that run's own page.
  */
 import { throughput } from '../../../../core/src/throughput';
-import { timelineChart } from '../charts';
+import { distribution, timelineChart } from '../charts';
 import { cards, emptyState, kindPill, metas, page, section, specPill, table } from '../shell';
-import { dayLabel, delta, dur, esc, num, pct, quantity, when } from '../format';
-import { abilityTable, castsByRankTable } from '../parts';
+import { compact, dayLabel, delta, dur, esc, num, pct, quantity, when } from '../format';
+import { abilityTable, castsByRankTable, deathSummary } from '../parts';
 import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
+import { sessionCompare, MIN_ZONE, type Basis, type SessionCompare } from './sessionCompare';
 import { changesAcrossSessions, changesAfterSession, type SessionChange } from '../../tracking';
 import { itemLabel, slotName } from '../gear';
 import { sessionSpecLine, specForSession, specTitle } from '../specInfo';
 
-export function renderSession(ctx: Ctx, id: number): string | null {
+export function renderSession(ctx: Ctx, id: number, opts: { basis?: Basis | null } = {}): string | null {
   const store = ctx.store;
   const s = store.session(id);
   if (!s) return null;
@@ -62,6 +63,12 @@ export function renderSession(ctx: Ctx, id: number): string | null {
   // throughput, which is true and useless; the phases date the switch instead.
   const spec = specForSession(store, segments);
   const specLine = sessionSpecLine(spec, s.offset_min);
+
+  // How this session sat against your own history — the one thing only this app can say, which the
+  // session page (unlike the run page) did not use. Scoped to this character: an alt's night is a
+  // different measurement, so it must not become the median the main is judged against.
+  const history = store.listSessions(500, s.character_guid ?? s.character_name);
+  const compare = sessionCompare(s, history, opts.basis ?? null);
 
   const chart = timelineChart(
     segments.map((seg) => ({
@@ -206,13 +213,16 @@ export function renderSession(ctx: Ctx, id: number): string | null {
     ${cards([
       { k: `${t.kind} per second`, v: num(t.rate), hint: 'per second in combat', lead: true },
       { k: `${t.kind} done`, v: num(t.total) },
+      { k: 'in combat', v: dur(s.engaged_s), hint: `of ${dur(s.duration_s)}` },
+      { k: 'field kills', v: num(s.field_kills), hint: "everyone's" },
+      { k: 'kills / hr', v: perHourLabel(s.field_kills, s.duration_s), hint: 'wall clock' },
+    ])}
+    ${compareSection(compare, s.id)}
+    ${cards([
       { k: `${t.otherKind} done`, v: num(t.otherTotal) },
       { k: 'damage taken', v: num(s.damage_taken) },
       { k: 'dtps', v: num(dtps) },
-      { k: 'in combat', v: dur(s.engaged_s), hint: `of ${dur(s.duration_s)}` },
-      { k: 'field kills', v: num(s.field_kills), hint: "everyone's" },
       { k: 'your kills', v: num(s.kills), hint: 'last hit' },
-      { k: 'kills / hr', v: perHourLabel(s.field_kills, s.duration_s), hint: 'wall clock' },
       { k: 'kills / combat hr', v: perHourLabel(s.field_kills, s.engaged_s), hint: 'in combat' },
       { k: 'your deaths', v: num(s.my_deaths) },
       { k: 'field deaths', v: num(s.deaths), hint: `${num(s.players_died)} players` },
@@ -264,9 +274,91 @@ export function renderSession(ctx: Ctx, id: number): string | null {
           )
         : ''
     }
+    ${deathSummary(store.deaths(id), s.offset_min)}
     ${abilitySections}`;
 
   return page(s.zone_name || 'Session', body, { active: 'sessions', ctx });
+}
+
+/** A metric's value in the metric's own unit. */
+function compareValue(key: string, v: number, rateUnit: string): string {
+  if (key === 'rate') return `${num(v)} ${rateUnit}`;
+  if (key === 'killsPerHour') return `${num(v)}/hr`;
+  return `${num(v)} dtps`;
+}
+
+/**
+ * "How this session stacked up" — the run page's comparison, raised to the whole session, with the
+ * basis named and switchable. Null means there is nothing yet to compare against, which the page
+ * says plainly rather than hiding the feature.
+ */
+function compareSection(c: SessionCompare | null, id: number): string {
+  if (!c) {
+    return `<h2>how this session stacked up<span class="hint">the first comparable session on this character</span></h2>
+      <div class="empty">Nothing to compare against yet — once you have more sessions, this shows where a night sits against your own median and best.</div>`;
+  }
+
+  const onChar = c.characterName ? ` on ${esc(c.characterName)}` : '';
+  const inBasis =
+    c.basis === 'zone' && c.zoneName
+      ? `in ${esc(c.zoneName)}`
+      : 'across your sessions';
+  const compared =
+    c.basis === 'zone' && c.zoneName
+      ? `your ${c.zoneCount} other ${esc(c.zoneName)} session${c.zoneCount === 1 ? '' : 's'}${onChar}`
+      : c.allCount === 1
+        ? `your only other session${onChar}`
+        : `all ${c.allCount} of your other sessions${onChar}`;
+  const thin =
+    c.basis === 'all' && c.zoneName && c.zoneCount < MIN_ZONE
+      ? ` · not enough ${esc(c.zoneName)} history yet`
+      : '';
+
+  const rows = c.metrics.map(
+    (m) => `<tr>
+      <td class="l">${esc(m.label)}</td>
+      <td><strong>${compareValue(m.key, m.value, c.rateUnit)}</strong></td>
+      <td>${compareValue(m.key, m.median, c.rateUnit)}</td>
+      <td>${compareValue(m.key, m.best, c.rateUnit)}</td>
+    </tr>`,
+  );
+
+  const rate = c.metrics.find((m) => m.key === 'rate');
+  const verb = c.rateUnit === 'hps' ? 'more healing than' : 'faster than';
+  const plot = rate
+    ? `${distribution(rate.dots, {
+        current: c.currentIndex,
+        format: (n) => `${compact(n)} ${c.rateUnit}`,
+      })}
+       <div class="sub">each dot is one session ${inBasis}; yours is highlighted${
+         rate.percentile === null
+           ? ''
+           : ` — ${rate.value >= rate.median ? 'above' : 'below'} your median, ${verb} ${Math.round(
+               rate.percentile * 100,
+             )}% of them`
+       }.</div>`
+    : '';
+
+  // The toggle only appears when both bases actually have something to show.
+  const toggle =
+    c.zoneCount > 0 && c.allCount > 0 && c.zoneName
+      ? `<div class="sub" style="margin-top:6px">compare against:
+         ${
+           c.basis === 'zone'
+             ? `<strong>${esc(c.zoneName)}</strong>`
+             : `<a href="/session?id=${id}&basis=zone">${esc(c.zoneName)}</a>`
+         } ·
+         ${c.basis === 'all' ? '<strong>all sessions</strong>' : `<a href="/session?id=${id}&basis=all">all sessions</a>`}</div>`
+      : '';
+
+  return section(
+    'how this session stacked up',
+    `<div class="row">
+       <div class="col">${table(['', 'this session', 'your median', 'your best'], rows, { left: [0] })}</div>
+       <div class="col" style="min-width:260px">${plot}${toggle}</div>
+     </div>`,
+    `compared against ${compared}${thin}`,
+  );
 }
 
 /** The tracked-value table, used both for the session bracket and for the flushes after it. */
