@@ -8,7 +8,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { InstallInfo } from './discover';
@@ -86,6 +86,36 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 function shippedAsset(name: string): string | null {
   const beside = join(HERE, 'assets', name);
   return existsSync(beside) ? beside : null;
+}
+
+/**
+ * Your own art, served from an `art/` folder beside the database — so you can drop a Warcraft
+ * wallpaper (or any image you have the right to use) in and the UI sits on it. Nothing here is
+ * shipped or committed: it lives only on this machine, and `art/background.*` is the page backdrop.
+ * Served as bytes, within the folder only, images only — never arbitrary files.
+ */
+const ART_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+};
+const BACKGROUND_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.svg'];
+
+/** Resolve an `/art/<name>` request to a real image inside the art folder, or null. Exported for test. */
+export function resolveArt(dbPath: string, name: string): { file: string; type: string } | null {
+  const dir = join(dirname(dbPath), 'art');
+  if (name === 'background') {
+    for (const e of BACKGROUND_EXTS) {
+      const f = join(dir, `background${e}`);
+      if (existsSync(f)) return { file: f, type: ART_TYPES[e]! };
+    }
+    return null;
+  }
+  // A plain filename inside the folder, no traversal, a known image type only.
+  if (!/^[\w.-]+$/.test(name) || name.includes('..')) return null;
+  const file = join(dir, name);
+  const type = ART_TYPES[extname(file).toLowerCase()];
+  if (!type || dirname(file) !== dir || !existsSync(file)) return null;
+  return { file, type };
 }
 
 const ASSETS: Record<string, { file: string; type: string }> = {
@@ -844,6 +874,20 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
           break;
 
         default: {
+          // Your local art, served as raw bytes straight from the folder beside the database.
+          if (url.pathname.startsWith('/art/')) {
+            const art = resolveArt(opts.dbPath, decodeURIComponent(url.pathname.slice('/art/'.length)));
+            const bytes = art ? await readFile(art.file).catch(() => null) : null;
+            if (art && bytes) {
+              res.writeHead(200, { 'content-type': art.type, 'cache-control': 'no-store' });
+              res.end(bytes);
+              return;
+            }
+            status = 404;
+            body = 'no art here';
+            type = 'text/plain; charset=utf-8';
+            break;
+          }
           const asset = ASSETS[url.pathname];
           const content = asset ? await readFile(asset.file, 'utf8').catch(() => null) : null;
           if (asset && content !== null) {

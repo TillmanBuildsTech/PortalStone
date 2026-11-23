@@ -245,6 +245,17 @@ body {
     repeating-linear-gradient(135deg, rgba(200,170,110,.014) 0 1px, transparent 1px 7px);
   background-attachment: fixed;
 }
+/* Your own art (optional): drop background.jpg (or .png/.webp) into the art/ folder beside the
+ * database and the whole app sits on it, WoW-login style. Absent, this paints nothing and the
+ * authored backdrop below shows through — nothing is fetched from the network either way. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(9,10,12,.66), rgba(9,10,12,.80) 55%, rgba(9,10,12,.88)),
+    url("/art/background") center / cover no-repeat fixed; }
+/* A faint portal sigil, drawn here (no imported art), so the empty corners still read as Warcraft. */
+body::after { content: ""; position: fixed; right: -70px; bottom: -90px; width: 560px; height: 560px;
+  z-index: -1; pointer-events: none; opacity: .9;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='560' viewBox='0 0 100 100'%3E%3Cg fill='none' stroke='%23c8aa6e' stroke-opacity='.05'%3E%3Cellipse cx='50' cy='50' rx='26' ry='40' stroke-width='1.1'/%3E%3Cellipse cx='50' cy='50' rx='40' ry='26' stroke-width='.9'/%3E%3Cellipse cx='50' cy='50' rx='13' ry='28' stroke-width='.7'/%3E%3Ccircle cx='50' cy='50' r='2' fill='%23c8aa6e' fill-opacity='.06' stroke='none'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat; }
 
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-track { background: transparent; }
