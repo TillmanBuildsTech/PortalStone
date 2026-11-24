@@ -10,7 +10,35 @@ import { ago, esc, num } from '../format';
 import type { Ctx } from '../context';
 import { itemNameConfigFromEnv, lastItemNameError } from '../../items';
 import { PROVIDERS } from '../../providers';
+import { VERSION } from '../../../../core/src/version';
 
+
+/** Updates: current version, channel switch, last check, and what (if anything) is available. */
+function updatesSection(u: NonNullable<Ctx['update']>): string {
+  const other = u.channel === 'beta' ? 'stable' : 'beta';
+  const status = u.latest
+    ? `<span class="pill ok">v${esc(u.latest.version)} available</span> <a href="${esc(u.latest.url)}" target="_blank" rel="noopener">release notes</a>`
+    : u.checkError
+      ? `<span class="pill warn">check failed</span> <span class="sub">${esc(u.checkError)}</span>`
+      : '<span class="pill ok">up to date</span>';
+  return section(
+    'updates',
+    `<ul class="plain">
+       <li>installed: <b>v${esc(u.current)}</b>${u.installed ? '' : ' <span class="sub">(dev run — update via the installer)</span>'}</li>
+       <li>channel: <b>${esc(u.channel)}</b> ${u.channel === 'beta' ? '(prereleases included)' : '(stable releases only)'}</li>
+       <li>last checked: ${u.checkedAt ? ago(u.checkedAt) : 'not yet'}</li>
+       <li>${status}</li>
+     </ul>
+     <div class="form" style="margin-top:10px">
+       <form method="post" action="/api/update/check"><button type="submit" class="linkbtn">check now</button></form>
+       <form method="post" action="/api/update/channel">
+         <input type="hidden" name="channel" value="${esc(other)}">
+         <button type="submit" class="linkbtn">switch to ${esc(other)} channel</button>
+       </form>
+     </div>`,
+    'how new builds reach this machine',
+  );
+}
 
 export function renderDiagnostics(ctx: Ctx): string {
   const logs = ctx.store.logFiles();
@@ -80,6 +108,7 @@ export function renderDiagnostics(ctx: Ctx): string {
       `${num(last.entries)} log file(s) checked`,
       last.errors ? `<span class="pill bad">${num(last.errors)} error(s)</span>` : '<span class="pill ok">no errors</span>',
       `<span class="mono">${esc(ctx.dbPath)}</span>`,
+      `portalstone ${esc(VERSION)}${ctx.update ? ` (${esc(ctx.update.channel)})` : ''}`,
       `node ${esc(process.version)}`,
     ])}
     ${cards([
@@ -89,6 +118,7 @@ export function renderDiagnostics(ctx: Ctx): string {
       { k: 'unknown lines', v: num(logs.reduce((a, l) => a + Number(l.unknown_lines), 0)) },
       { k: 'item names cached', v: num(ctx.store.itemNameCount()) },
     ])}
+    ${ctx.update ? updatesSection(ctx.update) : ''}
     ${section(
       'combat logs',
       table(['path', 'bytes', 'read to', 'layout', 'build', 'unknown', 'state'], logRows, {

@@ -1,0 +1,66 @@
+name: release
+
+# Pushing a version tag publishes a GitHub Release. Betas are prereleases: a tag with a hyphen
+# (v0.1.0-beta.1) is marked prerelease, a plain v0.1.0 is a full release. The running service reads
+# these to offer the in-app "Update & restart".
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # gh release create / upload needs to write the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - name: Gate on tests and types
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Resolve version from the tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Build the release bundle
+        run: npm run build
+        env:
+          PORTALSTONE_VERSION: ${{ steps.ver.outputs.version }}
+
+      - name: Package dist into a zip + checksum
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          ZIP="portalstone-$VER.zip"
+          # Zip the CONTENTS of dist/portalstone (files at the zip root), so the updater extracts
+          # straight into the install folder.
+          ( cd dist/portalstone && zip -r "../../$ZIP" . )
+          sha256sum "$ZIP" | awk '{print $1}' > "$ZIP.sha256"
+          echo "zip=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          PRE=""
+          if [[ "${{ steps.ver.outputs.prerelease }}" == "true" ]]; then PRE="--prerelease"; fi
+          gh release create "$TAG" \
+            "$ZIP" "$ZIP.sha256" \
+            --title "Portalstone $VER" \
+            --generate-notes \
+            $PRE

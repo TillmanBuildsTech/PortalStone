@@ -163,6 +163,10 @@ for (const asset of ['dashboard.js', 'dashboard.css', 'gridstack-all.js', 'grids
     process.exit(1);
   }
 }
+if (!existsSync(join(source, 'updater.mjs'))) {
+  say('Release build is missing updater.mjs (the self-updater) — rebuild with `npm run build`.');
+  process.exit(1);
+}
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   say(`--port must be a port number, got "${arg('port', '')}".`);
   process.exit(1);
@@ -226,6 +230,15 @@ say(`  copied portalstone.mjs (${(installed.mjs / 1024).toFixed(1)} KB) + assets
 
 writeFileSync(join(target, 'service.yaml'), yaml);
 say(`  wrote ${join(target, 'service.yaml')}`);
+
+// The running service reads this to learn how to update itself: the service name to drive `serv`
+// with, the folder to swap, and the port/db for reference. Its presence is also how the agent tells
+// an installed service (self-update enabled) from a dev run (notify-only).
+writeFileSync(
+  join(target, 'install.json'),
+  JSON.stringify({ name, target, port, db: dbPath }, null, 2) + '\n',
+);
+say(`  wrote ${join(target, 'install.json')}`);
 
 serv(['install', '--config', join(target, 'service.yaml')]);
 await servStart();

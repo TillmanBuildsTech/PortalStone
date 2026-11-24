@@ -1,5 +1,6 @@
 import type { InstallInfo } from '../discover';
 import type { Store } from '../store';
+import type { UpdateState } from '../update';
 
 /** Everything a page needs to render. Passed by reference so scan status is always live. */
 export interface LastScan {
@@ -37,6 +38,11 @@ export interface Ctx {
    * hand; the switcher then falls back to the active nav link's href.
    */
   path?: string;
+  /**
+   * The cached update state, for the "a newer version is available" banner and the diagnostics
+   * version line. Absent in unit tests that build a Ctx by hand; the banner is then simply omitted.
+   */
+  update?: UpdateState;
 }
 
 /** The scope fields of a Ctx, from a raw `?char=` value. */
