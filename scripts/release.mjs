@@ -58,11 +58,17 @@ if (dryRun) {
   process.exit(0);
 }
 
-pkg.version = version;
-writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
-
-git(['add', 'package.json']);
-git(['commit', '-m', `release: ${tag}`]);
+// Only bump+commit when the version actually changes; otherwise there is nothing to commit and we
+// simply tag the current HEAD. This keeps `release` idempotent — re-running after a manual bump, or
+// after a half-finished run, tags rather than failing on an empty commit.
+if (pkg.version !== version) {
+  pkg.version = version;
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+  git(['add', 'package.json']);
+  git(['commit', '-m', `release: ${tag}`]);
+} else {
+  process.stdout.write(`  package.json already at ${version}; tagging the current commit\n`);
+}
 git(['tag', tag]);
 git(['push', '--follow-tags']);
 
