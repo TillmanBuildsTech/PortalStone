@@ -16,12 +16,14 @@ const KIND_BY_NAME: Record<string, ZoneKind> = {
   'Arathi Basin': 'battleground',
   'Alterac Valley': 'battleground',
 
-  // capitals
+  // capitals. The log names some with a "City" suffix (Stormwind City) and some without
+  // (Ironforge), so both forms are listed where they differ.
   Undercity: 'city',
   Orgrimmar: 'city',
   'Thunder Bluff': 'city',
   Darnassus: 'city',
   Stormwind: 'city',
+  'Stormwind City': 'city',
   Ironforge: 'city',
 
   // classic dungeons
@@ -40,9 +42,13 @@ const KIND_BY_NAME: Record<string, ZoneKind> = {
   'The Temple of Atal\'Hakkar': 'dungeon',
   'Blackrock Depths': 'dungeon',
   'Lower Blackrock Spire': 'dungeon',
+  'Upper Blackrock Spire': 'dungeon',
   'Dire Maul': 'dungeon',
   Stratholme: 'dungeon',
   Scholomance: 'dungeon',
+  // The Stockade sits inside Stormwind; the log has been seen to write both spellings.
+  'The Stockade': 'dungeon',
+  'The Stockades': 'dungeon',
 
   // classic raids
   'Molten Core': 'raid',
