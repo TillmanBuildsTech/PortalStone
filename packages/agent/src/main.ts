@@ -16,6 +16,8 @@ import { listening, startServer } from './server';
 import { Store } from './store';
 import { parseMembers, sampleTracked } from './tracking';
 import { itemIdsIn, refreshItemNames } from './items';
+import { equippedItemIds, refreshDisplayIds } from './displayIds';
+import { isRenderableSlot } from './model';
 import { ensureSensorMetrics, readSensor } from './sensor';
 
 function arg(name: string, fallback: string | null = null): string | null {
@@ -122,6 +124,19 @@ async function main(): Promise<void> {
     if (itemIds.length > 0) {
       const names = await refreshItemNames(store, itemIds);
       if (names.added > 0) console.log(`  names: +${names.added} (${names.sources.join(', ') || 'cache'}), ${names.missing} still unknown`);
+    }
+    // Model display ids for equipped gear: cached, bounded, and only for slots a body actually
+    // shows, so the 3D model page renders without a network round-trip on first view.
+    const equipIds = sensor.chars.flatMap((c) =>
+      equippedItemIds((c.gear?.slots ?? []).filter((s) => isRenderableSlot(s.slot))),
+    );
+    if (equipIds.length > 0) {
+      try {
+        const disp = await refreshDisplayIds(store, equipIds);
+        if (disp.added > 0) console.log(`  display ids: +${disp.added}, ${disp.missing} still unknown`);
+      } catch (err) {
+        console.log(`  display ids: lookup skipped — ${(err as Error).message}`);
+      }
     }
   };
 

@@ -101,7 +101,10 @@ function characterSection(c: SensorCharacter, showAccount: boolean): string {
       ${card('played', c.played?.total === null || !c.played ? '—' : dur(c.played.total), c.played?.atLevel ? `${dur(c.played.atLevel)} at level` : undefined)}
       ${card('gold', c.money === null ? '—' : quantity(c.money, 'copper'))}
       ${card('zone', esc(c.meta.zone ?? '—'), c.meta.guild ? esc(c.meta.guild) : undefined)}
-    </div>`,
+    </div>
+    <div class="sub" style="margin-top:12px"><a href="/model?who=${encodeURIComponent(c.key)}&amp;acct=${encodeURIComponent(
+      c.account,
+    )}">View 3D model →</a></div>`,
     c.meta.updatedMs ? `observed ${when(c.meta.updatedMs, 0)} · SavedVariables flush, not live` : undefined,
   );
 

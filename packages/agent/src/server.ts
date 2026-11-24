@@ -24,6 +24,7 @@ import { renderPvp } from './ui/pages/pvp';
 import { renderDiagnostics } from './ui/pages/diagnostics';
 import { renderAddons } from './ui/pages/addons';
 import { renderSensor } from './ui/pages/sensor';
+import { renderModel } from './ui/pages/model';
 import { renderAddon, decodePath } from './ui/pages/addon';
 import { renderTracked } from './ui/pages/tracked';
 import {
@@ -774,6 +775,9 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
           break;
         case '/sensor':
           body = renderSensor(ctx);
+          break;
+        case '/model':
+          body = await renderModel(ctx, { who: url.searchParams.get('who'), acct: url.searchParams.get('acct') });
           break;
 
         case '/tracked':

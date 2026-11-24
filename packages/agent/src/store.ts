@@ -272,6 +272,23 @@ CREATE TABLE IF NOT EXISTS item_name_miss (
   checked_ms INTEGER NOT NULL
 );
 
+-- An item's model display id, for the 3D character viewer. The combat log and the addon both speak
+-- in item ids; a model engine dresses a character by display id, and the two are not the same
+-- number. Resolved once from an external item database and then cached here, exactly like names.
+CREATE TABLE IF NOT EXISTS item_display (
+  item_id INTEGER PRIMARY KEY,
+  display_id INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  fetched_ms INTEGER NOT NULL
+);
+
+-- Item ids a source could not give a display id for: skipped for a week rather than re-fetched.
+CREATE TABLE IF NOT EXISTS item_display_miss (
+  item_id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL,
+  checked_ms INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_session_start ON session (start_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_segment_session ON zone_segment (session_id);
 CREATE INDEX IF NOT EXISTS idx_segment_start ON zone_segment (start_ms DESC);
@@ -1708,6 +1725,64 @@ export class Store {
     if (ids.length === 0) return;
     const stmt = this.db.prepare(
       `INSERT INTO item_name_miss (item_id, source, checked_ms) VALUES (?,?,?)
+       ON CONFLICT(item_id) DO UPDATE SET source = excluded.source, checked_ms = excluded.checked_ms`,
+    );
+    const now = Date.now();
+    for (const id of ids) stmt.run(id, source, now);
+  }
+
+  /** Cached item id → model display id, for the 3D viewer. */
+  itemDisplayIds(ids: number[]): Map<number, number> {
+    const out = new Map<number, number>();
+    const unique = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT item_id, display_id FROM item_display WHERE item_id IN (${placeholders})`)
+      .all(...unique) as unknown as { item_id: number; display_id: number }[];
+    for (const row of rows) out.set(row.item_id, row.display_id);
+    return out;
+  }
+
+  /** Store display ids. Existing rows are kept: a display id never has to be fetched twice. */
+  saveItemDisplayIds(rows: { id: number; displayId: number; source: string }[]): number {
+    if (rows.length === 0) return 0;
+    const stmt = this.db.prepare(
+      'INSERT INTO item_display (item_id, display_id, source, fetched_ms) VALUES (?,?,?,?) ON CONFLICT(item_id) DO NOTHING',
+    );
+    let added = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const row of rows) {
+        const info = stmt.run(row.id, row.displayId, row.source, Date.now());
+        added += Number(info.changes);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return added;
+  }
+
+  /** Item ids a source failed to give a display id for recently: retried after `maxAgeMs`. */
+  itemDisplayMisses(ids: number[], maxAgeMs: number): Set<number> {
+    const out = new Set<number>();
+    const unique = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => '?').join(',');
+    const since = Date.now() - maxAgeMs;
+    const rows = this.db
+      .prepare(`SELECT item_id FROM item_display_miss WHERE item_id IN (${placeholders}) AND checked_ms >= ?`)
+      .all(...unique, since) as unknown as { item_id: number }[];
+    for (const row of rows) out.add(row.item_id);
+    return out;
+  }
+
+  saveItemDisplayMisses(ids: number[], source: string): void {
+    if (ids.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT INTO item_display_miss (item_id, source, checked_ms) VALUES (?,?,?)
        ON CONFLICT(item_id) DO UPDATE SET source = excluded.source, checked_ms = excluded.checked_ms`,
     );
     const now = Date.now();
