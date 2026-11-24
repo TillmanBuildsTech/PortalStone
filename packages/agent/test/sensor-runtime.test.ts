@@ -160,4 +160,36 @@ describe('PortalstoneSense at runtime', () => {
     expect(await get('logging')).toBe(true);
     expect(await get('PortalstoneDB.logPaused')).toBeNull();
   });
+
+  it('/psense log off is a durable opt-out: logging stays off through a /reload', async () => {
+    await boot();
+    await run('tick(1)');
+    expect(await get('logging')).toBe(true);
+    await run('SlashCmdList.PORTALSTONESENSE("log off"); tick(5)');
+    expect(await get('logging')).toBe(false);
+    expect(await get('PortalstoneDB.logDisabled')).toBe(true);
+    // Unlike a /combatlog pause, the opt-out survives a login (isInitialLogin true).
+    await run('fire("PLAYER_ENTERING_WORLD", true, false); tick(5)');
+    expect(await get('logging')).toBe(false);
+    expect(await get('said("combat logging disabled")')).toBe(true);
+  });
+
+  it('/psense log on resumes the hold after an opt-out', async () => {
+    await boot();
+    await run('SlashCmdList.PORTALSTONESENSE("log off"); tick(3)');
+    expect(await get('logging')).toBe(false);
+    await run('SlashCmdList.PORTALSTONESENSE("log on"); tick(3)');
+    expect(await get('logging')).toBe(true);
+    expect(await get('PortalstoneDB.logDisabled')).toBeNull();
+  });
+
+  it('typing /combatlog back on clears a /psense opt-out', async () => {
+    await boot();
+    await run('SlashCmdList.PORTALSTONESENSE("log off"); tick(3)');
+    expect(await get('PortalstoneDB.logDisabled')).toBe(true);
+    // The player re-enabling logging by hand plainly no longer wants the opt-out.
+    await run('typed("/COMBATLOG"); tick(1)');
+    expect(await get('logging')).toBe(true);
+    expect(await get('PortalstoneDB.logDisabled')).toBeNull();
+  });
 });

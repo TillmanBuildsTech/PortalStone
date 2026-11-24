@@ -33,9 +33,13 @@ You still decide:
 
 - **`/psense newlog`** closes the current log file and starts a new one about a second later.
   This is how to give a raid its own file to upload, without ever stopping logging.
+- **`/psense log off`** is a durable opt-out: it stops the addon forcing logging at all and survives
+  `/reload` and login (unlike a `/combatlog` pause, which lasts only the session). Use it to run with
+  logging fully off — for example to A/B test a client issue. **`/psense log on`** resumes the hold.
 - **`/combatlog`** works as it always has. If you turn logging off with it, it stays off until you
-  type `/combatlog` again, run `/psense newlog`, or next log in. A `/reload` keeps it off. Anything
-  played while it's off never reaches Portalstone.
+  type `/combatlog` again, run `/psense newlog`, or next log in. A `/reload` keeps it off. Turning it
+  back on by hand also clears a `/psense log off` opt-out. Anything played while it's off never
+  reaches Portalstone.
 
 The installer copies two files into `Interface/AddOns/PortalstoneSense`. It never touches `WTF` —
 SavedVariables belong to the game. The agent itself never writes to the game directory at all; only
