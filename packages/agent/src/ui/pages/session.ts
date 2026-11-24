@@ -15,6 +15,7 @@ import { sessionCompare, MIN_ZONE, type Basis, type SessionCompare } from './ses
 import { changesAcrossSessions, changesAfterSession, type SessionChange } from '../../tracking';
 import { itemLabel, slotName } from '../gear';
 import { sessionSpecLine, specForSession, specTitle } from '../specInfo';
+import { companionRoster } from './people';
 
 export function renderSession(ctx: Ctx, id: number, opts: { basis?: Basis | null } = {}): string | null {
   const store = ctx.store;
@@ -296,6 +297,11 @@ export function renderSession(ctx: Ctx, id: number, opts: { basis?: Basis | null
           )
         : ''
     }
+    ${companionRoster('grouped with', store.sessionCompanions(id), {
+      tz: s.offset_min,
+      char: s.character_guid ?? s.character_name,
+      hint: 'party and raid members seen in this session · click a name for every time you have grouped',
+    })}
     ${deathSummary(store.deaths(id), s.offset_min)}
     ${abilitySections}`;
 

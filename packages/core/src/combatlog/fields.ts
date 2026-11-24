@@ -95,9 +95,20 @@ export function flags(s: string | undefined): number {
 /** Combat-log object affiliation/type bit flags we actually use. */
 export const FLAG = {
   MINE: 0x00000001,
+  /** a member of your party (5-man grouping) — set on them, never on you (you are MINE) */
+  PARTY: 0x00000002,
+  /** a member of your raid (the whole battleground team, a 40-man, etc.) — likewise never you */
+  RAID: 0x00000004,
   PLAYER: 0x00000400,
   PET: 0x00002000,
 } as const;
+
+/**
+ * Affiliation that means "grouped with me": a party member or a raid member. The log sets exactly
+ * one affiliation bit per unit, and yours is always MINE — so a unit carrying PARTY or RAID is
+ * someone you were grouped with, which is the whole basis for knowing who you played with.
+ */
+export const GROUP_AFFILIATION = FLAG.PARTY | FLAG.RAID;
 
 /** Safe positional read: missing fields read as '' rather than undefined. */
 export function at(arr: string[], i: number): string {

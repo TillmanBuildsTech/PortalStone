@@ -12,7 +12,7 @@
  */
 import { BAG_SPELL, type LogEvent } from './decode';
 import { BagCollector } from '../bags';
-import { FLAG } from './fields';
+import { FLAG, GROUP_AFFILIATION } from './fields';
 
 type DamageEvent = Extract<LogEvent, { t: 'damage' }>;
 
@@ -63,6 +63,26 @@ export interface PvpRecord {
   guid: string | null;
   /** the ability that landed it, '' when the log does not say (a PARTY_KILL line has no payload) */
   spell: string;
+}
+
+/**
+ * Someone you were grouped with, seen in the log.
+ *
+ * This is the social record: a friendly player carrying a party or raid affiliation bit — a
+ * teammate, never you and never a creature. One entry per person, folded across every event they
+ * appear in, so "who did I play with, and how much" is answerable without a second pass.
+ */
+export interface CompanionStat {
+  /** the player's guid: stable per character per realm, the identity we group by over time */
+  guid: string;
+  /** the display name, '' until an event that carries one (heals name only a guid) is seen */
+  name: string;
+  /** the affiliation bits ever seen for them: PARTY, RAID, or both over a mixed session */
+  affiliation: number;
+  /** how many events they took part in — a rough weight for "how much together" */
+  events: number;
+  firstMs: number;
+  lastMs: number;
 }
 
 /** Fold one ability line into another (used when two segments of the same visit are merged). */
@@ -130,6 +150,8 @@ export class Bag {
   readonly pvpDeaths: PvpRecord[] = [];
   /** distinct players seen dying (one player can die several times) */
   readonly deathVictims = new Set<string>();
+  /** everyone you were grouped with while this bag was open, keyed by guid */
+  readonly companions = new Map<string, CompanionStat>();
 
   private touch(ms: number): void {
     if (!this.firstMs || ms < this.firstMs) this.firstMs = ms;
@@ -190,6 +212,37 @@ export class Bag {
     this.pvpKills.push(...other.pvpKills);
     this.pvpDeaths.push(...other.pvpDeaths);
     for (const victim of other.deathVictims) this.deathVictims.add(victim);
+    for (const c of other.companions.values()) {
+      this.noteCompanion(c.guid, c.name, c.affiliation, c.firstMs);
+      const cur = this.companions.get(c.guid)!;
+      // noteCompanion counted one event and one time point; add the rest of the folded total.
+      cur.events += c.events - 1;
+      if (c.lastMs > cur.lastMs) cur.lastMs = c.lastMs;
+    }
+  }
+
+  /**
+   * Record one sighting of a grouped player. Idempotent per person: the first sighting creates the
+   * entry, later ones widen the time span, fill a name once one is seen, and union the affiliation.
+   */
+  noteCompanion(guid: string, name: string, affiliation: number, ms: number): void {
+    const cur = this.companions.get(guid);
+    if (!cur) {
+      this.companions.set(guid, {
+        guid,
+        name: name || '',
+        affiliation: affiliation & GROUP_AFFILIATION,
+        events: 1,
+        firstMs: ms,
+        lastMs: ms,
+      });
+      return;
+    }
+    if (name && !cur.name) cur.name = name;
+    cur.affiliation |= affiliation & GROUP_AFFILIATION;
+    cur.events++;
+    if (ms && (!cur.firstMs || ms < cur.firstMs)) cur.firstMs = ms;
+    if (ms > cur.lastMs) cur.lastMs = ms;
   }
 
   addDamage(spellId: number, spellName: string, amount: number, isCrit: boolean): void {
@@ -301,6 +354,11 @@ export class Bag {
           killerPlayer: d.killerPlayer,
           spell: d.spell,
         })),
+      // Everyone you were grouped with in this bag's window: the social roster, newest-seen first
+      // so the people you fought alongside most recently lead.
+      companions: [...this.companions.values()]
+        .map((c) => ({ ...c }))
+        .sort((a, b) => b.events - a.events || b.lastMs - a.lastMs),
     };
   }
 }
@@ -348,6 +406,8 @@ export interface BagSnapshot {
   pvpDeaths: PvpRecord[];
   /** your own deaths, each with the finishing blow — PvE and PvP alike */
   yourDeaths: YourDeath[];
+  /** everyone you were grouped with in this window, most-active first */
+  companions: CompanionStat[];
 }
 
 export interface EncounterResult {
@@ -579,7 +639,9 @@ export class Aggregator {
     if (!seg) return;
     seg.endMs = Math.max(seg.endMs, atMs);
     const short = seg.endMs - seg.startMs < 20_000;
-    const empty = seg.bag.damageDone === 0 && seg.bag.kills === 0 && seg.bag.deaths === 0;
+    // A visit where teammates fought while you idled is still a real visit: grouping is activity.
+    const empty =
+      seg.bag.damageDone === 0 && seg.bag.kills === 0 && seg.bag.deaths === 0 && seg.bag.companions.size === 0;
     if (short && empty && s.zones.length > 1) {
       s.zones.pop();
       const prev = s.zones[s.zones.length - 1];
@@ -608,7 +670,9 @@ export class Aggregator {
       seg.bag.kills === 0 &&
       seg.bag.deaths === 0 &&
       seg.bag.casts === 0 &&
-      seg.bag.healingDone === 0;
+      seg.bag.healingDone === 0 &&
+      // Someone you were grouped with did something here, so you were present: keep the run.
+      seg.bag.companions.size === 0;
     for (let i = 0; i < s.zones.length; i++) {
       const seg = s.zones[i]!;
       const prev = kept[kept.length - 1];
@@ -652,6 +716,45 @@ export class Aggregator {
     const primary = this.enc ? this.enc.bag : s.open;
     const seg = s.zones[s.zones.length - 1];
     return seg ? [primary, seg.bag] : [primary];
+  }
+
+  /**
+   * Note every grouped player taking part in an event, into the session roster and the current
+   * zone's roster. The affiliation bit is the whole test: a unit carrying PARTY or RAID is a
+   * teammate (you are MINE), and PLAYER rules out their pets. Self is excluded by affiliation
+   * alone, so this is safe even before the player's own guid is known.
+   *
+   * Recorded into `s.open` directly rather than through `sinkBags`, so a companion seen during a
+   * boss encounter still reaches the session roster (the encounter bag is not the session bag).
+   */
+  private recordCompanions(s: SessionResult, ev: LogEvent, ms: number): void {
+    let units: { guid: string; name: string; flags: number }[];
+    if (ev.t === 'damage') {
+      units = [
+        { guid: ev.srcGuid, name: ev.srcName, flags: ev.srcFlags },
+        { guid: ev.dstGuid, name: ev.dstName, flags: ev.dstFlags },
+      ];
+    } else if (ev.t === 'heal') {
+      // Heal lines carry guids and flags but no names; the name is filled from a damage or cast
+      // event the same player produces, which a healer always does (their heals are cast events).
+      units = [
+        { guid: ev.srcGuid, name: '', flags: ev.srcFlags },
+        { guid: ev.dstGuid, name: '', flags: ev.dstFlags },
+      ];
+    } else if (ev.t === 'cast') {
+      units = [{ guid: ev.srcGuid, name: ev.srcName, flags: ev.srcFlags }];
+    } else {
+      return;
+    }
+    const seg = s.zones[s.zones.length - 1];
+    for (const u of units) {
+      if ((u.flags & GROUP_AFFILIATION) === 0) continue;
+      if ((u.flags & FLAG.PLAYER) === 0) continue;
+      if (!u.guid.startsWith('Player-')) continue;
+      if (u.guid === this.selfGuid || this.selfGuids.has(u.guid)) continue;
+      s.open.noteCompanion(u.guid, u.name, u.flags, ms);
+      if (seg) seg.bag.noteCompanion(u.guid, u.name, u.flags, ms);
+    }
   }
 
   private applyDamage(ev: DamageEvent, ms: number): void {
@@ -798,6 +901,9 @@ export class Aggregator {
     // Anything else is activity: it opens/extends a session and may time out an encounter.
     const s = this.ensureSession(ms, this.lastByte);
     if (this.enc && ms - this.enc.bag.lastMs > this.encounterGapMs) this.closeEncounter(null, ms);
+    // Who you were grouped with, from the affiliation bits this event carries. Done before the
+    // switch so a rolled swing (which returns early) still counts its teammate.
+    this.recordCompanions(s, ev, ms);
     const bags = this.sinkBags(s);
 
     switch (ev.t) {

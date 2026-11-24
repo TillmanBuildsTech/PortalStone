@@ -13,6 +13,7 @@ import type { Ctx } from '../context';
 import { perHourLabel, throughputFrom } from './sessionStats';
 import { runTrend } from './runCompare';
 import { specEvidenceText, specForRun, specTitle } from '../specInfo';
+import { companionRoster } from './people';
 
 export function renderRun(ctx: Ctx, id: number): string | null {
   const store = ctx.store;
@@ -192,6 +193,11 @@ export function renderRun(ctx: Ctx, id: number): string | null {
       { k: 'casts', v: num(seg.casts) },
     ])}
     ${compare}
+    ${companionRoster('grouped with', store.segmentCompanions(seg.id), {
+      tz: session?.offset_min ?? 0,
+      char: seg.character_guid ?? seg.character_name,
+      hint: 'party and raid members seen in this run · click a name for every time you have grouped',
+    })}
     ${deathSummary(store.segmentDeaths(seg.id), session?.offset_min ?? 0)}
     ${abilitySections}
     <div class="pager">
