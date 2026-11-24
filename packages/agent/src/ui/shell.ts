@@ -48,22 +48,57 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
-header { position: sticky; top: 0; z-index: 10; background: rgba(11,15,20,.92);
+header { position: sticky; top: 0; z-index: 30; background: rgba(11,15,20,.92);
   border-bottom: 1px solid var(--line); backdrop-filter: blur(6px); }
-.bar { max-width: 1180px; margin: 0 auto; padding: 0 22px; height: 52px; min-width: 0;
-  display: flex; align-items: center; gap: 26px; }
+.bar { max-width: 1180px; margin: 0 auto; padding: 0 18px; height: 52px; min-width: 0;
+  display: flex; align-items: center; gap: 14px; }
 .brand { color: var(--ink-strong); font-weight: 650; letter-spacing: .01em; font-size: 15px;
   display: flex; align-items: center; gap: 8px; }
 .brand:hover { text-decoration: none; }
 .brand i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 3px rgba(110,168,254,.15); display: inline-block; }
-nav { display: flex; gap: 2px; align-items: stretch; height: 100%; min-width: 0;
-  overflow-x: auto; scrollbar-width: none; }
-nav::-webkit-scrollbar { display: none; }
-nav a { color: var(--ink-dim); padding: 0 11px; display: flex; align-items: center;
-  font-size: 13px; border-bottom: 2px solid transparent; }
-nav a:hover { color: var(--ink); text-decoration: none; }
-nav a.on { color: var(--ink-strong); border-bottom-color: var(--accent); }
+
+/* The menu toggle: a hamburger that opens the slide-out drawer. Pure CSS — a hidden checkbox
+ * drives the drawer and the scrim through sibling selectors, so every page gets a working menu
+ * with no script, and each full page load starts with the drawer closed. The checkbox keeps real
+ * opacity:0 placement (not display:none) so it stays keyboard-focusable and toggles with space. */
+.nav-toggle { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; margin: 0; }
+.hamburger { display: inline-flex; flex-direction: column; justify-content: center; gap: 4px;
+  width: 36px; height: 34px; padding: 0 7px; border-radius: 7px; cursor: pointer; flex: 0 0 auto;
+  border: 1px solid transparent; }
+.hamburger:hover { border-color: var(--line); background: var(--panel-2); }
+.hamburger span { display: block; height: 2px; width: 100%; background: var(--ink); border-radius: 2px;
+  transition: transform .22s ease, opacity .18s ease; }
+.nav-toggle:focus-visible + .hamburger { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nav-toggle:checked + .hamburger span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.nav-toggle:checked + .hamburger span:nth-child(2) { opacity: 0; }
+.nav-toggle:checked + .hamburger span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+/* The slide-out drawer holds every section link, off-canvas to the left until the hamburger opens
+ * it. It works the same at every screen size — the nav links live here, never on the top bar. */
+nav { position: fixed; top: 0; left: 0; z-index: 40; height: 100vh; height: 100dvh;
+  width: min(84vw, 288px); display: flex; flex-direction: column; background: var(--panel);
+  border-right: 1px solid var(--line); box-shadow: 6px 0 30px -10px rgba(0,0,0,.7);
+  transform: translateX(-100%); transition: transform .24s ease; overflow-y: auto;
+  overscroll-behavior: contain; }
+.nav-toggle:checked ~ nav { transform: translateX(0); }
+.nav-head { display: flex; align-items: center; justify-content: space-between; height: 52px;
+  padding: 0 12px 0 20px; border-bottom: 1px solid var(--line-soft); flex: 0 0 auto; }
+.nav-title { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); }
+.nav-close { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  border-radius: 7px; cursor: pointer; color: var(--ink-dim); font-size: 15px; line-height: 1; }
+.nav-close:hover { background: var(--panel-2); color: var(--ink); }
+nav a { color: var(--ink-dim); display: flex; align-items: center; gap: 10px; padding: 12px 20px;
+  font-size: 14px; border-left: 3px solid transparent; }
+nav a:hover { color: var(--ink); background: var(--panel-2); text-decoration: none; }
+nav a.on { color: var(--ink-strong); border-left-color: var(--accent); background: var(--panel-2); }
+
+/* The scrim dims the page behind an open drawer; clicking it (it is a label for the toggle) closes
+ * the menu, as does clicking any link or the ✕. */
+.nav-scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.5); opacity: 0;
+  pointer-events: none; transition: opacity .24s ease; }
+.nav-toggle:checked ~ .nav-scrim { opacity: 1; pointer-events: auto; }
+
 .hdr-right { margin-left: auto; display: flex; align-items: center; gap: 16px; min-width: 0; }
 .status { color: var(--ink-faint); font-size: 12px; display: flex;
   align-items: center; gap: 10px; }
@@ -228,9 +263,7 @@ footer { max-width: 1180px; margin: 0 auto; padding: 0 22px 30px; color: var(--i
   font-size: 11.5px; }
 
 @media (max-width: 700px) {
-  .bar { gap: 14px; padding: 0 14px; }
-  nav { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-  nav a { padding: 0 7px; font-size: 12px; flex: 0 0 auto; }
+  .bar { gap: 10px; padding: 0 12px; }
   .status { display: none; }
   .who-label { display: none; }
   .who select { max-width: 150px; }
@@ -281,8 +314,11 @@ header { background: linear-gradient(180deg, rgba(16,14,10,.94), rgba(10,9,7,.9)
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
 .brand svg { width: 21px; height: 21px; display: block; flex: 0 0 auto;
   filter: drop-shadow(0 0 5px rgba(200,170,110,.5)); }
-nav a.on { color: var(--accent-bright); border-bottom-color: var(--accent);
-  text-shadow: 0 0 12px rgba(200,170,110,.45); }
+nav { background: linear-gradient(180deg, rgba(16,14,10,.98), rgba(10,9,7,.98));
+  border-right-color: var(--accent-dim); }
+.nav-head { border-bottom-color: var(--accent-dim); }
+nav a.on { color: var(--accent-bright); border-left-color: var(--accent);
+  background: rgba(200,170,110,.08); text-shadow: 0 0 12px rgba(200,170,110,.45); }
 .status .live { color: var(--good); text-shadow: 0 0 10px rgba(95,207,107,.35); }
 
 /* Engraved titles. */
@@ -405,8 +441,15 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
 <meta name="viewport" content="width=device-width, initial-scale=1">${refresh}
 <link rel="icon" href="${FAVICON}">
 <title>${esc(title)} · Portalstone</title><style>${CSS}</style>${styles}${scripts}</head>
-<body><header><div class="bar"><a class="brand" href="/">${BRAND_MARK}Portalstone</a><nav>${nav}</nav>
-<div class="hdr-right">${switcher}<div class="status">${status}</div></div></div></header>
+<body><header><div class="bar">
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation menu">
+<label for="nav-toggle" class="hamburger" aria-hidden="true"><span></span><span></span><span></span></label>
+<a class="brand" href="/">${BRAND_MARK}Portalstone</a>
+<div class="hdr-right">${switcher}<div class="status">${status}</div></div>
+<label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
+<nav aria-label="Primary"><div class="nav-head"><span class="nav-title">Menu</span>
+<label for="nav-toggle" class="nav-close" aria-label="Close menu">&#10005;</label></div>${nav}</nav>
+</div></header>
 <main>${body}</main>
 <footer>Portalstone · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
 }
