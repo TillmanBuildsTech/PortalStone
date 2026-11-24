@@ -1,6 +1,7 @@
 {
   "name": "portalstone",
   "private": true,
+  "version": "0.1.0-beta.1",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -9,6 +10,7 @@
     "test": "npm -w @portalstone/core test && npm -w @portalstone/agent test",
     "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/agent/tsconfig.json --noEmit",
     "build": "node scripts/build-release.mjs",
+    "release": "node scripts/release.mjs",
     "service:install": "node scripts/install-service.mjs",
     "agent": "tsx packages/agent/src/main.ts",
     "mvp": "tsx packages/agent/src/main.ts --open",

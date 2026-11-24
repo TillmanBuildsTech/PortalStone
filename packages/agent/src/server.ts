@@ -42,12 +42,28 @@ import { sampleTracked } from './tracking';
 import { listAddons, readAddon } from './addons';
 import { collectValues, entityOptions, pinEntity } from '../../core/src/savedvars/shape';
 import { isTable } from '../../core/src/savedvars/lua';
+import type { Channel, UpdateState } from './update';
+
+/**
+ * The update subsystem, as the server sees it. main.ts owns the cached state and the install
+ * context; the server only reads the state (for the banner) and relays the two user actions.
+ */
+export interface UpdateController {
+  state: () => UpdateState;
+  /** persist the channel choice, then re-check; resolves when the fresh state is in place */
+  setChannel: (channel: Channel) => Promise<void>;
+  /** begin a self-update; { ok: false } with a reason when it cannot (dev run, nothing to apply) */
+  apply: () => Promise<{ ok: boolean; error?: string }>;
+  /** force a check now (the "check now" control on diagnostics) */
+  recheck: () => Promise<void>;
+}
 
 export interface ServerOptions {
   port: number;
   dbPath: string;
   installs: InstallInfo[];
   lastScan: () => LastScan;
+  update: UpdateController;
 }
 
 /** Form bodies are tiny (a path and a unit); anything bigger is not a form this app sends. */
@@ -207,6 +223,7 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
       installs,
       lastScan: opts.lastScan(),
       dbPath: opts.dbPath,
+      update: opts.update.state(),
       path: url.pathname + (scopeQuery ? `?${scopeQuery}` : ''),
       ...resolveScope(store, url.searchParams.get('char')),
     };
@@ -234,6 +251,57 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
           );
           type = 'application/json; charset=utf-8';
           break;
+
+        case '/api/update':
+          body = JSON.stringify(opts.update.state(), null, 2);
+          type = 'application/json; charset=utf-8';
+          break;
+
+        case '/api/update/apply': {
+          if (req.method !== 'POST') {
+            status = 405;
+            body = JSON.stringify({ error: 'POST to apply an update' });
+            type = 'application/json; charset=utf-8';
+            break;
+          }
+          await readForm(req); // drain the body; the action carries no fields
+          const result = await opts.update.apply();
+          status = result.ok ? 202 : 409;
+          body = JSON.stringify(result, null, 2);
+          type = 'application/json; charset=utf-8';
+          break;
+        }
+
+        case '/api/update/channel': {
+          if (req.method !== 'POST') {
+            status = 405;
+            body = page('Method not allowed', '<h1>405</h1><p>POST to change the update channel.</p>', {
+              active: 'diagnostics',
+            });
+            break;
+          }
+          const form = await readForm(req);
+          const channel: Channel = form.get('channel') === 'stable' ? 'stable' : 'beta';
+          await opts.update.setChannel(channel);
+          res.writeHead(303, { location: '/diagnostics', 'cache-control': 'no-store' });
+          res.end();
+          return;
+        }
+
+        case '/api/update/check': {
+          if (req.method !== 'POST') {
+            status = 405;
+            body = page('Method not allowed', '<h1>405</h1><p>POST to check for updates.</p>', {
+              active: 'diagnostics',
+            });
+            break;
+          }
+          await readForm(req);
+          await opts.update.recheck();
+          res.writeHead(303, { location: '/diagnostics', 'cache-control': 'no-store' });
+          res.end();
+          return;
+        }
 
         case '/api/session': {
           const id = intParam(url, 'id');

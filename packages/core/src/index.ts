@@ -12,3 +12,4 @@ export * from './combatlog/layout';
 export * from './combatlog/timestamp';
 export * from './savedvars/lua';
 export * from './savedvars/shape';
+export * from './version';

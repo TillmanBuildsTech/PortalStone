@@ -6,6 +6,8 @@
  */
 import { ago, dur, esc, num, plural } from './format';
 import type { Ctx } from './context';
+import { VERSION } from '../../../core/src/version';
+import type { UpdateState } from '../update';
 
 export type NavKey =
   | 'sessions'
@@ -264,6 +266,23 @@ ul.plain { margin: 4px 0 0; padding-left: 18px; color: var(--ink-dim); font-size
 footer { max-width: 1180px; margin: 0 auto; padding: 0 22px 30px; color: var(--ink-faint);
   font-size: 11.5px; }
 
+/* The update banner: a slim bronze strip under the header when a newer build exists, or a live
+ * progress line while one is being applied. */
+.update-bar { background: linear-gradient(180deg, rgba(200,170,110,.12), rgba(200,170,110,.04));
+  border-bottom: 1px solid var(--accent-dim); }
+.update-bar .inner { max-width: 1180px; margin: 0 auto; padding: 9px 22px; display: flex;
+  align-items: center; gap: 12px 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink); }
+.update-bar .msg { color: var(--ink-strong); }
+.update-bar .msg b { color: var(--accent-bright); font-weight: 600; }
+.update-bar .ver { color: var(--ink-dim); }
+.update-bar .actions { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.update-bar form { display: inline; }
+.update-bar .spin { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--accent-dim); border-top-color: var(--accent-bright);
+  animation: spin 0.8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 700px) { .update-bar .inner { padding: 9px 14px; } }
+
 @media (max-width: 700px) {
   .bar { gap: 10px; padding: 0 12px; }
   .status { display: none; }
@@ -451,9 +470,55 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
 <label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
 <nav aria-label="Primary"><div class="nav-head"><span class="nav-title">Menu</span>
 <label for="nav-toggle" class="nav-close" aria-label="Close menu">&#10005;</label></div>${nav}</nav>
-</div></header>
+</div></header>${opts.ctx?.update ? updateBanner(opts.ctx.update) : ''}
 <main>${body}</main>
-<footer>Portalstone · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
+<footer>Portalstone v${esc(VERSION)} · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
+}
+
+/**
+ * The strip under the header. Three states:
+ *   - applying: a live progress line that polls /api/update and reloads when the new build answers
+ *     (the poll survives the service restarting under it — a failed fetch just keeps waiting);
+ *   - available + installed service: the offer, with "View changes" and "Update & restart";
+ *   - available but a dev run: the offer with a link only, since self-update needs the service.
+ * Nothing shows when there is no newer build.
+ */
+export function updateBanner(u: UpdateState): string {
+  const phase = u.apply.phase;
+  if (phase !== 'idle') {
+    if (phase === 'error') {
+      return `<div class="update-bar"><div class="inner">
+        <span class="msg"><b>Update failed.</b></span>
+        <span class="ver">${esc(u.apply.message ?? 'see the service log')}</span>
+        <span class="actions"><a href="/diagnostics">diagnostics</a></span>
+      </div></div>`;
+    }
+    const label =
+      phase === 'restarting'
+        ? 'Restarting into the new build'
+        : `Updating${u.latest ? ` to v${esc(u.latest.version)}` : ''}`;
+    return `<div class="update-bar"><div class="inner">
+      <span class="msg"><span class="spin"></span> ${label}…</span>
+      <span class="ver">${esc(u.apply.message ?? '')}</span>
+    </div></div>
+    <script>(function(){var cur=${JSON.stringify(u.current)};setInterval(function(){
+      fetch('/api/update',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+        if(s.current!==cur||s.apply.phase==='idle'||s.apply.phase==='error'){location.reload();}
+      }).catch(function(){});
+    },3000);})();</script>`;
+  }
+
+  if (!u.latest) return '';
+  const l = u.latest;
+  const beta = l.prerelease ? ' <span class="pill spec">beta</span>' : '';
+  const action = u.installed
+    ? `<form method="post" action="/api/update/apply"><button type="submit" class="linkbtn">Update &amp; restart</button></form>`
+    : `<span class="ver">run the installer to update</span>`;
+  return `<div class="update-bar"><div class="inner">
+    <span class="msg"><b>Portalstone v${esc(l.version)}</b> is available${beta}</span>
+    <span class="ver">you're on v${esc(u.current)}</span>
+    <span class="actions"><a href="${esc(l.url)}" target="_blank" rel="noopener">View changes</a>${action}</span>
+  </div></div>`;
 }
 
 /**

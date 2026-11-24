@@ -9,10 +9,20 @@
  */
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { discover, type InstallInfo } from './discover';
 import { scan } from './scan';
-import { listening, startServer } from './server';
+import { listening, startServer, type UpdateController } from './server';
+import {
+  applyUpdate,
+  checkForUpdate,
+  initialState,
+  normalizeChannel,
+  readInstallContext,
+  type Channel,
+  type UpdateState,
+} from './update';
 import { Store } from './store';
 import { parseMembers, sampleTracked } from './tracking';
 import { itemIdsIn, refreshItemNames } from './items';
@@ -140,9 +150,50 @@ async function main(): Promise<void> {
     }
   };
 
+  // Update subsystem. The channel is remembered in the database; the install context (written by the
+  // service installer beside the bundle) is present only for a real install, which is the one case
+  // "Update & restart" can actually act — a dev run falls back to notify-only.
+  const channel = normalizeChannel(store.meta('update.channel'));
+  const bundleDir = dirname(fileURLToPath(import.meta.url));
+  const install = await readInstallContext(bundleDir);
+  let updateState: UpdateState = initialState(channel, install !== null);
+  const refreshUpdate = async (ch: Channel = updateState.channel): Promise<void> => {
+    updateState = await checkForUpdate(ch, updateState);
+  };
+  const updateController: UpdateController = {
+    state: () => updateState,
+    setChannel: async (ch) => {
+      store.setMeta('update.channel', ch);
+      updateState = { ...updateState, channel: ch };
+      await refreshUpdate(ch);
+    },
+    recheck: async () => {
+      await refreshUpdate();
+    },
+    apply: async () => {
+      if (!install) return { ok: false, error: 'not an installed service — update via the installer' };
+      const latest = updateState.latest;
+      if (!latest) return { ok: false, error: 'no update available' };
+      if (updateState.apply.phase !== 'idle' && updateState.apply.phase !== 'error') {
+        return { ok: false, error: 'an update is already in progress' };
+      }
+      updateState = { ...updateState, apply: { phase: 'downloading' } };
+      // Fire-and-forget: the response returns now, the banner polls, and the service is stopped only
+      // once the new build is staged and verified.
+      void applyUpdate(install, latest, (phase, message) => {
+        updateState = { ...updateState, apply: { phase, message } };
+      }).catch((err) => {
+        updateState = { ...updateState, apply: { phase: 'error', message: (err as Error).message } };
+      });
+      return { ok: true };
+    },
+  };
+
   // Claim the port before scanning: a second agent should stop here, not after writing a full scan
   // into the database the first one is using.
-  const server = once ? null : startServer(store, installs, { port, dbPath, installs, lastScan: () => last });
+  const server = once
+    ? null
+    : startServer(store, installs, { port, dbPath, installs, lastScan: () => last, update: updateController });
   if (server) {
     try {
       await listening(server, port);
@@ -172,8 +223,18 @@ async function main(): Promise<void> {
     runScan().catch((err) => console.error('scan failed:', err));
   }, 60_000);
 
+  // Check for a newer release now and every six hours. Failures are swallowed inside checkForUpdate,
+  // so an offline machine or a rate limit never disturbs the loop or the banner.
+  void refreshUpdate().then(() => {
+    if (updateState.latest) console.log(`update: v${updateState.latest.version} available (on v${updateState.current})`);
+  });
+  const updateTimer = setInterval(() => {
+    void refreshUpdate();
+  }, 6 * 60 * 60 * 1000);
+
   const shutdown = (): void => {
     clearInterval(timer);
+    clearInterval(updateTimer);
     server.close();
     store.close();
     process.exit(0);
