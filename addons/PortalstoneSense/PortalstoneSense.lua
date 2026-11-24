@@ -30,7 +30,9 @@ Rules this file follows, because the app depends on them:
 
 Commands: /psense (print the snapshot and logging state), /psense write
 (force one now), /psense newlog (close the combat log file and start a new
-one, e.g. for a raid to upload on its own).
+one, e.g. for a raid to upload on its own), /psense log off (stop forcing
+combat logging — a durable opt-out that survives /reload and login, for when
+you want to run with logging fully off) and /psense log on (resume).
 --]]--------------------------------------------------------------------------
 
 local ADDON = "PortalstoneSense"
@@ -417,6 +419,9 @@ end
 
 local function holdCombatLog(now)
   if type(LoggingCombat) ~= "function" then return end
+  -- A durable opt-out (/psense log off): stop forcing logging entirely until the player resumes.
+  -- Distinct from logPaused, which is the client's own /combatlog pause and lasts only the session.
+  if DB.logDisabled then return end
   if logReopenAt then
     if now < logReopenAt then return end
     logReopenAt = nil
@@ -453,6 +458,8 @@ end
 -- state it reads is the one the player chose.
 local function afterCombatLogCommand()
   if logging() then
+    -- The player turned logging on by hand: any durable opt-out is clearly no longer wanted.
+    DB.logDisabled = nil
     if DB.logPaused then
       DB.logPaused = nil
       say("combat logging back on; Portalstone will keep it on again.")
@@ -589,6 +596,29 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
     newCombatLog()
     return
   end
+  -- Durable logging opt-out, for running a session (or several) with logging fully off.
+  if msg == "log off" then
+    DB.logDisabled = true
+    logReopenAt = nil
+    if logging() then safe(LoggingCombat, false) end
+    say("combat logging disabled; it will stay off through /reload and login. /psense log on to resume.")
+    return
+  end
+  if msg == "log on" then
+    DB.logDisabled = nil
+    say("combat logging re-enabled; Portalstone will keep it on and start a fresh file.")
+    return
+  end
+  if msg == "log" then
+    say(
+      "combat logging: "
+        .. (DB.logDisabled and "disabled (/psense log on to resume)"
+          or logging() and "on"
+          or DB.logPaused and "off (paused by /combatlog)"
+          or "off (turning it back on)")
+    )
+    return
+  end
   if msg == "write" then
     local ok, err = pcall(snapshot, "manual")
     if DEFAULT_CHAT_FRAME then
@@ -615,5 +645,5 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
       tostring(char.meta and char.meta.zone or "?")
     )
   )
-  DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalstone|r /psense write forces a snapshot; /psense newlog starts a new combat log file.")
+  DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalstone|r /psense write forces a snapshot; /psense newlog starts a new combat log file; /psense log off stops forcing logging.")
 end
