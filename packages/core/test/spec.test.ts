@@ -8,6 +8,10 @@ function cast(name: string, amount: number): AbilityInput {
 function dealt(name: string, amount: number, hits: number): AbilityInput {
   return { name, kind: 'damage', amount, hits };
 }
+/** An ability that hit the player — its spell belongs to the attacker, not the player. */
+function taken(name: string, amount: number, hits: number): AbilityInput {
+  return { name, kind: 'taken', amount, hits };
+}
 
 /** The two abilities a Retribution paladin cannot have without the tree. */
 const RET_ONLY: AbilityInput[] = [
@@ -41,6 +45,16 @@ describe('inferSpec', () => {
     expect(guess?.spec).toBe('Retribution');
     expect(guess?.role).toBe('damage');
     expect(guess?.evidence.map((e) => e.spell)).toContain('Seal of Command');
+  });
+
+  it('never infers a spec from damage the player took', () => {
+    // The Stockade case: a warrior mob lands Shield Slam (a Protection marker) on the player, who
+    // cast nothing talent-locked themselves. The attacker's ability is not the player's spec.
+    expect(inferSpec({ abilities: [taken('Shield Slam', 52, 3)] })).toBeNull();
+    // And a taken marker must not override, or sit beside, what the player actually performed.
+    const guess = inferSpec({ abilities: [...RET_ONLY, taken('Shield Slam', 52, 3)] });
+    expect(guess?.spec).toBe('Retribution');
+    expect(guess?.evidence.map((e) => e.spell)).not.toContain('Shield Slam');
   });
 
   it('says nothing when the log holds no talent-locked ability', () => {

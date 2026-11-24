@@ -253,7 +253,11 @@ const SIGNATURES: Signature[] = [
 
 export interface AbilityInput {
   name: string;
-  /** 'cast', 'damage', 'healing', 'taken' — anything the log recorded it under */
+  /**
+   * What the log recorded it under: 'cast', 'damage' (done), 'healing' (done), or 'taken'. Only the
+   * first three are the player's own actions and count as evidence; 'taken' is damage received and
+   * is ignored, since its spell belongs to whoever hit the player.
+   */
   kind?: string;
   amount?: number;
   hits?: number;
@@ -293,6 +297,10 @@ export function inferSpec(input: InferInput): SpecGuess | null {
     const name = a.name.trim();
     if (!name) continue;
     const kind = a.kind ?? 'cast';
+    // Evidence is only what the player performed — casts, damage done, healing done. Damage *taken*
+    // names the attacker's ability, not the player's: a Stockade warrior's Shield Slam landing on
+    // you is not proof you are Protection. Received abilities are never evidence of your spec.
+    if (kind === 'taken') continue;
     const key = `${name}\u0000${kind}`;
     const prev = seen.get(key);
     if (prev) {
