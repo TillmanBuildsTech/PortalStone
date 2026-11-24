@@ -126,6 +126,35 @@ describe('ingest — refuses rather than lying', () => {
   });
 });
 
+describe('ingest — a long non-combat opening', () => {
+  // A session that opens with a long stretch of buffing (a city, the auction house, idling) pushes
+  // the first damage events well past any fixed line count. The window follows damage events, not
+  // lines, so the whole log is no longer discarded for starting quietly.
+  const preamble: MakeLogOptions = {
+    format: 'forever',
+    zone: { id: 1456, name: 'Stormwind City' },
+    encounter: null,
+    zone1Casts: 6000,
+    playerDamage: [1000, 1000, 1000, 1000, 1000],
+  };
+
+  it('keeps reading past a 6000-line buff preamble to find the layout', async () => {
+    const path = file('buffs-then-combat.txt', makeLog(preamble));
+    const res = await ingest({ path });
+    expect(res.ok).toBe(true);
+    expect(totalDamage(res)).toBe(5000);
+  });
+
+  it('still gives up at the safety cap, naming the shortfall', async () => {
+    const path = file('buffs-then-combat-capped.txt', makeLog(preamble));
+    const res = await ingest({ path, maxCalibrationLines: 5000 });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('layout_unknown');
+    expect(res.detail).toMatch(/damage event\(s\) to calibrate on/);
+  });
+});
+
 describe('ingest — forever shape (payload after a 19-field unit block)', () => {
   const F: MakeLogOptions = { ...BASE, format: 'forever', swingDamage: [500, 700], swingEvents: 'both' };
 

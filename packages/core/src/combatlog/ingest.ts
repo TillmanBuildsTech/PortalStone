@@ -2,9 +2,14 @@
  * Streaming ingest: read → calibrate → decode → aggregate, with a byte offset so a tailing
  * agent reads only what was appended since last time.
  *
- * The calibration window is the whole point: we buffer the first few thousand lines (about 1 MB),
- * prove a layout against the damage events in them, and only then commit to numbers. If nothing
- * fits, the ingest fails with a named reason and a diagnostic table — it does not return zeroes.
+ * The calibration window is the whole point: we buffer lines, prove a layout against the damage
+ * events in them, and only then commit to numbers. The window is driven by how many damage events
+ * it has seen, not by how far it has read: a session that opens with a long non-combat stretch
+ * (buffing in a city, the auction house, idling) can push the first real hit thousands of lines in,
+ * and giving up at a fixed line count threw the whole log away. So we keep reading until there are
+ * enough damage events to calibrate on, with a generous line cap only as a safety valve against a
+ * log that never fights. If nothing fits, the ingest fails with a named reason and a diagnostic
+ * table — it does not return zeroes.
  */
 import { createReadStream } from 'node:fs';
 import { Aggregator, type BagSnapshot, type SessionResult } from './aggregate';
@@ -43,7 +48,7 @@ export interface IngestOptions {
   encounterGapMs?: number;
   /** stop after this many bytes (0 = whole file) */
   maxBytes?: number;
-  /** lines to scan while searching for a layout before giving up */
+  /** safety cap: give up searching for a layout after this many lines without enough damage events */
   maxCalibrationLines?: number;
   /** damage events needed before attempting calibration */
   calibrationSamples?: number;
@@ -144,7 +149,12 @@ interface RawLine {
 }
 
 const DEFAULTS = {
-  maxCalibrationLines: 5000,
+  // A safety valve, not the working window: calibration triggers on damage-event count
+  // (calibrationSamples) for any log that fights, long before this. It only bites a log that is
+  // almost entirely non-combat, and bounds how much gets buffered before we give up on it. Sized
+  // well above a realistic pre-combat stretch — a buffing session before a dungeon pull has been
+  // seen to run past 5,000 lines with the first five hits only arriving near 5,600.
+  maxCalibrationLines: 50000,
   calibrationSamples: 200,
 };
 
