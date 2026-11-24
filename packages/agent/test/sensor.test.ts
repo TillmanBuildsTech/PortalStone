@@ -64,6 +64,7 @@ const SENSOR = `PortalstoneDB = {
 ["guid"] = "Player-6934-0194514D",
 ["class"] = "PALADIN",
 ["race"] = "Scourge",
+["sex"] = 2,
 ["faction"] = "Horde",
 ["guild"] = "Origins",
 ["level"] = 32,
@@ -147,7 +148,7 @@ describe('readSensor', () => {
     expect(read.chars).toHaveLength(1);
     const c = read.chars[0]!;
     expect(c.key).toBe('Dead Sadfatkid');
-    expect(c.meta).toMatchObject({ class: 'PALADIN', level: 32, guild: 'Origins', zone: 'Scarlet Monastery' });
+    expect(c.meta).toMatchObject({ class: 'PALADIN', race: 'Scourge', sex: 2, level: 32, guild: 'Origins', zone: 'Scarlet Monastery' });
     expect(c.spec).toMatchObject({ name: 'Retribution', build: '0/31/20', points: 51, role: 'DAMAGER', group: 1 });
     expect(c.spec!.tabs.map((t) => [t.name, t.points])).toEqual([
       ['Holy', 0],

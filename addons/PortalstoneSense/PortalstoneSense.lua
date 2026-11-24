@@ -79,6 +79,8 @@ local function identity()
   local name = UnitName("player")
   if not name then return nil end
   local _, class = UnitClass("player")
+  -- UnitRace's second return is the locale-independent token ("Scourge", "NightElf"); that is what
+  -- a 3D model viewer keys on, and it is what has always been stored as `race`.
   local _, race = UnitRace("player")
   local faction = safe(UnitFactionGroup, "player")
   local guild = safe(GetGuildInfo, "player")
@@ -88,6 +90,9 @@ local function identity()
     guid = safe(UnitGUID, "player"), -- retail only; the log carries the guid anyway
     class = class,
     race = race,
+    -- UnitSex is 1 unknown / 2 male / 3 female. Stored raw; a model viewer needs it to pick the
+    -- body, and the log never carries it.
+    sex = safe(UnitSex, "player"),
     faction = faction,
     guild = guild,
     level = safe(UnitLevel, "player"),
@@ -214,7 +219,7 @@ end
 
 local function gearSnapshot()
   local g = { slots = {} }
-  local sum, n = 0, 0
+  local sum, rated, equipped = 0, 0, 0
   for slot = 0, 19 do
     local link = safe(GetInventoryItemLink, "player", slot)
     if link then
@@ -222,16 +227,22 @@ local function gearSnapshot()
       local id = tonumber(string.match(link, "item:(%d+)"))
       if id then
         g.slots[slot] = { id = id, ilvl = ilvl, quality = quality, name = name }
+        equipped = equipped + 1
         if ilvl then
           sum = sum + ilvl
-          n = n + 1
+          rated = rated + 1
         end
       end
     end
   end
-  if n == 0 then return nil end
-  g.ilvl = math.floor(sum / n + 0.5)
-  g.equipped = n
+  -- Keep the snapshot whenever anything is equipped, even if the client has not cached item info
+  -- yet (GetItemInfo returns nil for a short while right after login). The item *ids* are what a
+  -- model viewer and a transmog view need, and they are available from the link immediately; item
+  -- level is an average that can fill in on a later flush. Discarding everything for a missing
+  -- ilvl threw away the ids too.
+  if equipped == 0 then return nil end
+  g.ilvl = rated > 0 and math.floor(sum / rated + 0.5) or nil
+  g.equipped = equipped
   return g
 end
 

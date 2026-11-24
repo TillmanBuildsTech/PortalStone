@@ -42,6 +42,8 @@ export interface SensorMeta {
   guid: string | null;
   class: string | null;
   race: string | null;
+  /** UnitSex: 1 unknown / 2 male / 3 female. Null for characters recorded before the addon captured it. */
+  sex: number | null;
   faction: string | null;
   guild: string | null;
   level: number | null;
@@ -196,6 +198,7 @@ function readMeta(char: LuaValue, key: string): SensorMeta {
     guid: str(get(char, 'meta', 'guid')),
     class: str(get(char, 'meta', 'class')),
     race: str(get(char, 'meta', 'race')),
+    sex: num(get(char, 'meta', 'sex')),
     faction: str(get(char, 'meta', 'faction')),
     guild: str(get(char, 'meta', 'guild')),
     level: num(get(char, 'meta', 'level')),

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Portalstone — 3D model prototype</title>
+<style>
+  :root { color-scheme: dark; --bg:#14161b; --panel:#1c1f27; --line:#2b2f3a; --fg:#e6e8ee; --sub:#9aa0ac; --accent:#8080ff; --ok:#67d39b; --bad:#e86a6a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+  header { padding:16px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:18px; }
+  header .sub { color:var(--sub); font-size:13px; margin-top:2px; }
+  .wrap { display:flex; flex-wrap:wrap; gap:16px; padding:16px; }
+  .stage { flex:1 1 420px; min-width:320px; }
+  #model { width:100%; height:560px; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  aside { flex:0 0 340px; max-width:100%; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--sub); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--sub); font-weight:600; }
+  code { color:var(--accent); }
+  .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
+  button, select { background:#262a34; color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font:inherit; cursor:pointer; }
+  #status { font-size:13px; white-space:pre-wrap; color:var(--sub); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Portalstone · 3D character model — prototype</h1>
+  <div class="sub">Real captured data · Blister, Dwarf Shaman · WoW Forever. Rendered with Wowhead's Classic model engine.</div>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <div id="model"></div>
+  </div>
+  <aside>
+    <div class="card">
+      <h2>Character</h2>
+      <div class="row">race <code>Dwarf (3)</code></div>
+      <div class="row">
+        gender
+        <select id="gender">
+          <option value="1">male (1)</option>
+          <option value="0">female (0)</option>
+        </select>
+        <span class="sub">not yet captured — toggle manually</span>
+      </div>
+      <button id="rerender">re-render</button>
+    </div>
+
+    <div class="card">
+      <h2>Equipment (captured → resolved)</h2>
+      <table>
+        <thead><tr><th>slot</th><th>item</th><th>item id</th><th>display id</th></tr></thead>
+        <tbody id="items"></tbody>
+      </table>
+      <div class="sub" style="margin-top:8px">Item ids come straight from the addon's gear snapshot; display ids were resolved from Wowhead's Classic item XML (<code>&amp;xml</code> → <code>&lt;icon displayId&gt;</code>).</div>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div id="status">loading engine…</div>
+    </div>
+  </aside>
+</div>
+
+<!-- Wowhead's ZamModelViewer needs jQuery, a CONTENT_PATH, and its own viewer script. -->
+<script>
+  // Classic content, and no display-id lookup service: we pass display ids directly.
+  window.CONTENT_PATH = 'https://wow.zamimg.com/modelviewer/classic/';
+  window.WOTLK_TO_RETAIL_DISPLAY_ID_API = undefined;
+
+  // Real captured gear for Blister (Dwarf Shaman), slots exactly as the addon recorded them (and
+  // confirmed against Wowhead's own item slot data). Item 154 "Primitive Mantle" is a Shirt
+  // (slot 4) despite the name; the model viewer does not render shirts, so it is shown in the
+  // table but not passed to the engine. Viewer-rendered slots: 1 head, 3 shoulder, 5 chest,
+  // 6 waist, 7 legs, 8 feet, 9 wrist, 10 hands, 15 back, 16 main hand, 17 off hand, 18 ranged,
+  // 19 tabard.
+  const RENDERABLE = new Set([1, 3, 5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19]);
+  const GEAR = [
+    { slot: 4,  label: 'shirt',     item: 'Primitive Mantle', itemId: 154, displayId: 8738 },
+    { slot: 7,  label: 'legs',      item: 'Primitive Kilt',   itemId: 153, displayId: 8740 },
+    { slot: 16, label: 'main hand', item: 'Worn Mace',        itemId: 36,  displayId: 5194 },
+  ];
+
+  const statusEl = document.getElementById('status');
+  const setStatus = (msg, cls) => { statusEl.className = cls || ''; statusEl.textContent = msg; };
+
+  // Fill the data table.
+  document.getElementById('items').innerHTML = GEAR.map((g) => {
+    const shown = RENDERABLE.has(g.slot) ? '' : ' <span class="sub">(not rendered)</span>';
+    return `<tr><td>${g.label}${shown}</td><td>${g.item}</td><td><code>${g.itemId}</code></td><td><code>${g.displayId}</code></td></tr>`;
+  }).join('');
+
+  let viewer = null;
+  async function render() {
+    try {
+      setStatus('building model…');
+      if (viewer && viewer.destroy) { try { viewer.destroy(); } catch (e) {} }
+      const { generateModels } = await import('https://cdn.jsdelivr.net/npm/wow-model-viewer@1.5.3/+esm');
+      const character = {
+        race: 3, // Dwarf
+        gender: Number(document.getElementById('gender').value),
+        skin: 0, face: 0, hairStyle: 0, hairColor: 0, facialStyle: 0,
+        items: GEAR.filter((g) => RENDERABLE.has(g.slot)).map((g) => [g.slot, g.displayId]),
+      };
+      viewer = await generateModels(1, '#model', character, 'classic');
+      setStatus('rendered ✓  — ' + GEAR.length + ' equipped items from real capture', 'ok');
+    } catch (err) {
+      setStatus('render failed: ' + (err && err.message ? err.message : err) +
+        '\n\nThe resolved data above is still the real pipeline output; the failure is in the Wowhead engine load/render.', 'bad');
+      console.error(err);
+    }
+  }
+  document.getElementById('rerender').addEventListener('click', render);
+</script>
+<script src="https://code.jquery.com/jquery-3.5.1.min.js" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+<script src="https://wow.zamimg.com/modelviewer/classic/viewer/viewer.min.js"></script>
+<script>
+  // Wait for jQuery + the viewer global, then draw.
+  (function waitAndRender(tries) {
+    if (window.jQuery && window.ZamModelViewer) return render();
+    if (tries <= 0) return setStatus('engine did not load: jQuery or ZamModelViewer missing (check network / wow.zamimg.com reachability)', 'bad');
+    setTimeout(() => waitAndRender(tries - 1), 300);
+  })(40);
+</script>
+</body>
+</html>
