@@ -21,6 +21,7 @@ import { renderSession } from './ui/pages/session';
 import { renderRun } from './ui/pages/run';
 import { renderRuns } from './ui/pages/runs';
 import { renderPvp } from './ui/pages/pvp';
+import { renderPeople, renderPerson } from './ui/pages/people';
 import { renderDiagnostics } from './ui/pages/diagnostics';
 import { renderAddons } from './ui/pages/addons';
 import { renderSensor } from './ui/pages/sensor';
@@ -878,6 +879,18 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
         case '/pvp':
           body = renderPvp(ctx);
           break;
+        case '/people':
+          body = renderPeople(ctx);
+          break;
+        case '/person': {
+          const guid = (url.searchParams.get('guid') ?? '').slice(0, 128);
+          const html = guid ? renderPerson(ctx, guid) : null;
+          if (html === null) {
+            status = 404;
+            body = notFound('No one with that id has grouped with you in these logs.');
+          } else body = html;
+          break;
+        }
         case '/diagnostics':
           body = renderDiagnostics(ctx);
           break;

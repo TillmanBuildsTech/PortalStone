@@ -18,7 +18,9 @@ import type { BagDrop } from '../../core/src/bags';
 // 5: sessions carry their own character (a log file can span two toons). Older databases stamped
 // every session in a file with one name, which cannot be repaired from what they stored — so the
 // bump buys one full re-read.
-const DETAIL_SCHEMA = '6';
+// 7: the companion roster (who you were grouped with) is derived from affiliation bits older reads
+// discarded, so it cannot be backfilled from stored rows — one full re-read populates it.
+const DETAIL_SCHEMA = '7';
 
 
 const SCHEMA = `
@@ -162,6 +164,33 @@ CREATE TABLE IF NOT EXISTS death (
 
 CREATE INDEX IF NOT EXISTS idx_death_session ON death (session_id);
 CREATE INDEX IF NOT EXISTS idx_death_segment ON death (segment_id);
+
+-- Who you were grouped with, one row per (zone visit, person). A companion is a friendly player
+-- carrying a party or raid affiliation in the log — a teammate, never you and never a creature.
+-- Stored at the grain of the run it happened in (segment_id), so a run page can show its own group
+-- and the session- and all-time rosters are grouped up from these rows. This is the social spine:
+-- "who have I played with, and how often" is COUNT(DISTINCT session_id) per guid over this table.
+CREATE TABLE IF NOT EXISTS companion (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  segment_id INTEGER REFERENCES zone_segment(id) ON DELETE SET NULL,
+  guid TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  -- PARTY and/or RAID bits ever seen for them in this run
+  affiliation INTEGER NOT NULL DEFAULT 0,
+  -- events they took part in: a rough weight for how much you two actually did together
+  events INTEGER NOT NULL DEFAULT 0,
+  first_ms INTEGER NOT NULL,
+  last_ms INTEGER NOT NULL,
+  -- whose session this was, so "my companions" is scoped to one character like every other page
+  character_guid TEXT,
+  character_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_companion_session ON companion (session_id);
+CREATE INDEX IF NOT EXISTS idx_companion_segment ON companion (segment_id);
+CREATE INDEX IF NOT EXISTS idx_companion_guid ON companion (guid);
+CREATE INDEX IF NOT EXISTS idx_companion_char ON companion (character_name, character_guid);
 
 -- A property the user chose to track, from any installed addon. The base adapter discovers what
 -- is available; these two tables are what turns one of those properties into a time series.
@@ -463,6 +492,62 @@ export interface PvpSummary {
   killers: number;
   /** people who killed you more than once: the list that makes this page worth opening */
   repeatKillers: number;
+  firstMs: number | null;
+  lastMs: number | null;
+}
+
+/** One companion, added up over all the time you have grouped with them. */
+export interface CompanionRow {
+  /** the player's guid — their stable identity, which the rows are grouped by */
+  guid: string;
+  /** the name last written for them in the log */
+  name: string;
+  /** distinct sessions you shared: "times we played together" */
+  sessions: number;
+  /** distinct instanced runs (dungeon, raid, battleground) you shared */
+  runs: number;
+  /** distinct zones you were grouped in */
+  zones: number;
+  /** total events seen together, a rough weight for how much you did */
+  events: number;
+  /** >0 when ever grouped in a party (5-man) */
+  in_party: number;
+  /** >0 when ever grouped in a raid or battleground */
+  in_raid: number;
+  first_ms: number;
+  last_ms: number;
+}
+
+/** A companion's presence within one session or one run. */
+export interface CompanionPresenceRow {
+  guid: string;
+  name: string;
+  events: number;
+  in_party: number;
+  in_raid: number;
+  first_ms: number;
+  last_ms: number;
+}
+
+/** One session you shared with a companion — a row on their profile. */
+export interface CompanionSessionRow {
+  session_id: number;
+  zone_name: string | null;
+  start_ms: number;
+  end_ms: number | null;
+  offset_min: number;
+  character_name: string | null;
+  events: number;
+  in_party: number;
+  in_raid: number;
+}
+
+/** Headline numbers for the People page. */
+export interface CompanionSummary {
+  /** distinct people grouped with */
+  people: number;
+  /** distinct sessions that had anyone grouped */
+  sessions: number;
   firstMs: number | null;
   lastMs: number | null;
 }
@@ -865,6 +950,7 @@ export class Store {
         dropAbilities.run(row.id);
         this.db.prepare('DELETE FROM encounter WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM death WHERE session_id = ?').run(row.id);
+        this.db.prepare('DELETE FROM companion WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM zone_segment WHERE session_id = ?').run(row.id);
         this.db.prepare('DELETE FROM session WHERE id = ?').run(row.id);
       }
@@ -924,6 +1010,11 @@ export class Store {
         const insertSegmentAbility = this.db.prepare(
           'INSERT INTO segment_ability (segment_id, kind, spell_id, name, amount, hits) VALUES (?,?,?,?,?,?)',
         );
+        const insertCompanion = this.db.prepare(
+          `INSERT INTO companion (session_id, segment_id, guid, name, affiliation, events, first_ms,
+             last_ms, character_guid, character_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        );
         // Zone visit time ranges, so each of your deaths can be tied to the run it happened in.
         const segRanges: { startMs: number; endMs: number; id: number }[] = [];
         for (const z of s.zones) {
@@ -959,6 +1050,22 @@ export class Store {
           for (const a of z.topDamageTaken) insertSegmentAbility.run(segmentId, 'taken', a.id, a.name, a.amount, a.hits);
           // Casts keep the spell id, so two ranks of one spell stay two rows.
           for (const c of z.topCasts) insertSegmentAbility.run(segmentId, 'cast', c.id, c.name, c.casts, 0);
+          // Who you were grouped with during this run. Stamped with the character so the social
+          // pages scope to one toon, exactly as the session and run pages do.
+          for (const c of z.companions) {
+            insertCompanion.run(
+              id,
+              segmentId,
+              c.guid,
+              c.name,
+              c.affiliation,
+              c.events,
+              c.firstMs,
+              c.lastMs,
+              character.guid,
+              character.name,
+            );
+          }
         }
         // Your deaths, from the session bag (the authority on the whole visit), each resolved to the
         // zone it fell in. A death with no containing segment is still kept against the session.
@@ -1152,6 +1259,129 @@ export class Store {
     return this.db
       .prepare(`SELECT * FROM pvp_event ${where} ORDER BY ts_ms DESC LIMIT ?`)
       .all(...args) as unknown as PvpEventRow[];
+  }
+
+  /* ---------------------------------------------------------------------------------------------
+   * Companions: who you grouped with, over time. Everything here reads the `companion` table, which
+   * holds one row per (run, person). The all-time view groups those rows by guid; a session or run
+   * view filters them to one id. Grouping by guid, not name, is deliberate — a guid is the same
+   * person every session, where a name can be shared across realms.
+   * ------------------------------------------------------------------------------------------- */
+
+  /** The SELECT list shared by the all-time companion views (aggregate over the join). */
+  private static readonly COMPANION_AGG = `
+    c.guid,
+    COALESCE(MAX(NULLIF(c.name, '')), 'unknown') AS name,
+    COUNT(DISTINCT c.session_id) AS sessions,
+    COUNT(DISTINCT CASE WHEN z.kind IN ('dungeon','raid','battleground') THEN c.segment_id END) AS runs,
+    COUNT(DISTINCT COALESCE(NULLIF(z.zone_name, ''), 'unknown')) AS zones,
+    COALESCE(SUM(c.events), 0) AS events,
+    MAX(c.affiliation & 2) AS in_party,
+    MAX(c.affiliation & 4) AS in_raid,
+    MIN(c.first_ms) AS first_ms,
+    MAX(c.last_ms) AS last_ms`;
+
+  /**
+   * Everyone you have grouped with, most together first, optionally scoped to one character.
+   *
+   * "Times together" is distinct sessions, not events: an evening in a dungeon is one shared
+   * session however many thousand lines it wrote. Ordered by that, so the people you actually keep
+   * playing with rise to the top — which is the whole point of the page.
+   */
+  companions(character: string | null = null, limit = 200): CompanionRow[] {
+    const where = character ? `WHERE ${whoIs('c.')} = ?` : '';
+    const args = character ? [character, limit] : [limit];
+    return this.db
+      .prepare(
+        `SELECT ${Store.COMPANION_AGG}
+           FROM companion c LEFT JOIN zone_segment z ON z.id = c.segment_id
+           ${where}
+          GROUP BY c.guid
+          ORDER BY sessions DESC, events DESC, last_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args) as unknown as CompanionRow[];
+  }
+
+  /** Headline numbers for the People page. */
+  companionSummary(character: string | null = null): CompanionSummary {
+    const where = character ? `WHERE ${whoIs('c.')} = ?` : '';
+    const args = character ? [character] : [];
+    return this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT guid) AS people,
+                COUNT(DISTINCT session_id) AS sessions,
+                MIN(first_ms) AS firstMs,
+                MAX(last_ms) AS lastMs
+           FROM companion c ${where}`,
+      )
+      .get(...args) as unknown as CompanionSummary;
+  }
+
+  /** One companion's all-time totals: the header of their profile. */
+  companion(guid: string, character: string | null = null): CompanionRow | undefined {
+    const clauses = ['c.guid = ?'];
+    const args: (string | number)[] = [guid];
+    if (character) {
+      clauses.push(`${whoIs('c.')} = ?`);
+      args.push(character);
+    }
+    return this.db
+      .prepare(
+        `SELECT ${Store.COMPANION_AGG}
+           FROM companion c LEFT JOIN zone_segment z ON z.id = c.segment_id
+          WHERE ${clauses.join(' AND ')}
+          GROUP BY c.guid`,
+      )
+      .get(...args) as unknown as CompanionRow | undefined;
+  }
+
+  /** The sessions you shared with one companion, newest first — the body of their profile. */
+  companionSessions(guid: string, character: string | null = null, limit = 200): CompanionSessionRow[] {
+    const clauses = ['c.guid = ?'];
+    const args: (string | number)[] = [guid];
+    if (character) {
+      clauses.push(`${whoIs('c.')} = ?`);
+      args.push(character);
+    }
+    args.push(limit);
+    return this.db
+      .prepare(
+        `SELECT c.session_id, s.zone_name, s.start_ms, s.end_ms, s.offset_min, s.character_name,
+                COALESCE(SUM(c.events), 0) AS events,
+                MAX(c.affiliation & 2) AS in_party,
+                MAX(c.affiliation & 4) AS in_raid
+           FROM companion c JOIN session s ON s.id = c.session_id
+          WHERE ${clauses.join(' AND ')}
+          GROUP BY c.session_id
+          ORDER BY s.start_ms DESC
+          LIMIT ?`,
+      )
+      .all(...args) as unknown as CompanionSessionRow[];
+  }
+
+  /** Who you were grouped with in one session, grouped up from its runs. */
+  sessionCompanions(sessionId: number): CompanionPresenceRow[] {
+    return this.companionPresence('session_id', sessionId);
+  }
+
+  /** Who you were grouped with in one run. */
+  segmentCompanions(segmentId: number): CompanionPresenceRow[] {
+    return this.companionPresence('segment_id', segmentId);
+  }
+
+  private companionPresence(column: 'session_id' | 'segment_id', id: number): CompanionPresenceRow[] {
+    return this.db
+      .prepare(
+        `SELECT guid, COALESCE(MAX(NULLIF(name, '')), 'unknown') AS name,
+                COALESCE(SUM(events), 0) AS events,
+                MAX(affiliation & 2) AS in_party, MAX(affiliation & 4) AS in_raid,
+                MIN(first_ms) AS first_ms, MAX(last_ms) AS last_ms
+           FROM companion WHERE ${column} = ?
+          GROUP BY guid
+          ORDER BY events DESC, name`,
+      )
+      .all(id) as unknown as CompanionPresenceRow[];
   }
 
   session(id: number): SessionRow | undefined {
