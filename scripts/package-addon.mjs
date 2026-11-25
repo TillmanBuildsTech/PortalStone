@@ -65,8 +65,10 @@ if (process.platform === 'win32') {
     { stdio: 'inherit' },
   );
 } else {
-  // Run from the staging root so the folder lands at the zip root; write straight to the dist path.
-  execFileSync('zip', ['-r', zipPath, addonName], { cwd: stageRoot, stdio: 'inherit' });
+  // Run from the staging root so the folder lands at the zip root. The archive path is relative to
+  // that cwd (../<zip>, i.e. back up into dist/) — some `zip` builds mis-handle an absolute archive
+  // argument, and this mirrors the app-bundle step's proven `cd … && zip -r ../../$ZIP .` form.
+  execFileSync('zip', ['-r', join('..', zipName), addonName], { cwd: stageRoot, stdio: 'inherit' });
 }
 
 // Checksum beside it, matching the app bundle's convention.
