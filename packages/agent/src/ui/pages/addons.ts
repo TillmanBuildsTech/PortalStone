@@ -1,5 +1,5 @@
 /**
- * Which addons Portalstone is set up to read, and which are still only candidates.
+ * Which addons PortalStone is set up to read, and which are still only candidates.
  *
  * "Configured" is about the app, not the addon: an addon is configured when at least one tracked
  * value reads from it. Everything else with readable data is available to configure — one link away

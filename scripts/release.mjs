@@ -71,7 +71,7 @@ if (pkg.version !== version) {
 }
 // An annotated tag (-a), and push it by name: `--follow-tags` pushes only annotated tags, and even
 // then a lightweight tag would be skipped — so push the branch and the tag itself, explicitly.
-git(['tag', '-a', tag, '-m', `Portalstone ${version}`]);
+git(['tag', '-a', tag, '-m', `PortalStone ${version}`]);
 git(['push', 'origin', 'HEAD']);
 git(['push', 'origin', tag]);
 

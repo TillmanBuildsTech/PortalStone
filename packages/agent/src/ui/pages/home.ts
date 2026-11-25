@@ -68,7 +68,7 @@ export function renderHome(ctx: Ctx): string {
     return page(
       'No sessions yet',
       `<h1>Nothing recorded yet</h1>
-       ${metas(['Portalstone is watching for combat logs']) }
+       ${metas(['PortalStone is watching for combat logs']) }
        ${character ? `<div class="notice">No sessions for <b>${esc(ctx.characterName ?? character)}</b>. <a href="/">Show every character</a></div>` : ''}
        ${emptyState(
          'No sessions are stored, so there is nothing to chart.',

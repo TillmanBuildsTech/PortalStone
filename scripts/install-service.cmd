@@ -1,5 +1,5 @@
 @echo off
-rem Install Portalstone as a Windows service. Double-click, approve the UAC prompt.
+rem Install PortalStone as a Windows service. Double-click, approve the UAC prompt.
 rem Extra arguments pass through, e.g. install-service.cmd --print
 setlocal
 net session >nul 2>&1

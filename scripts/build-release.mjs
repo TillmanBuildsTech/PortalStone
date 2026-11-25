@@ -108,7 +108,7 @@ await writeFile(
   join(outDir, 'portalstone.cmd'),
   [
     '@echo off',
-    'rem Run Portalstone from this folder. Arguments pass through, e.g. --once or --open.',
+    'rem Run PortalStone from this folder. Arguments pass through, e.g. --once or --open.',
     'setlocal',
     'node "%~dp0portalstone.mjs" %*',
     '',

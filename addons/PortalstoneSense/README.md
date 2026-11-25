@@ -1,10 +1,10 @@
-# Portalstone Sensor
+# PortalStone Sensor
 
 One addon, every number the combat log cannot see.
 
 The combat log records what you cast and what it hit. It has no talent event, no gear, no
 professions, no lockouts and no played time — 41 event types, checked against 64 MB of real
-`_forever_` logs. Everything Portalstone says about those things today is either an inference from
+`_forever_` logs. Everything PortalStone says about those things today is either an inference from
 abilities or a third-party addon's opinion about its own user.
 
 This addon closes that gap with one file we control. It writes `PortalstoneDB` to
@@ -39,7 +39,7 @@ You still decide:
 - **`/combatlog`** works as it always has. If you turn logging off with it, it stays off until you
   type `/combatlog` again, run `/psense newlog`, or next log in. A `/reload` keeps it off. Turning it
   back on by hand also clears a `/psense log off` opt-out. Anything played while it's off never
-  reaches Portalstone.
+  reaches PortalStone.
 
 The installer copies two files into `Interface/AddOns/PortalstoneSense`. It never touches `WTF` —
 SavedVariables belong to the game. The agent itself never writes to the game directory at all; only

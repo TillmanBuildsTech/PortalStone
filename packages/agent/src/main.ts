@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Portalstone agent (MVP).
+ * PortalStone agent (MVP).
  *
  *   tsx src/main.ts                # scan, serve http://127.0.0.1:48120, rescan every 60s
  *   tsx src/main.ts --open         # same, and open the browser

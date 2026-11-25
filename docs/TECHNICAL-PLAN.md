@@ -1,4 +1,4 @@
-# Portalstone — Technical Plan v1
+# PortalStone — Technical Plan v1
 
 Status: proposal, 13 Nov 2026. Supersedes nothing; amends `SPEC-providers-and-capabilities.md`
 (which stays as the data-architecture contract — it is the best document in the repo).
@@ -246,7 +246,7 @@ any file over 8 MB, and Questie is already 7.3 MB.
 
 ## 6. Storage
 
-Canonical store, one SQLite file, `%LOCALAPPDATA%\Portalstone\portalstone.db`.
+Canonical store, one SQLite file, `%LOCALAPPDATA%\PortalStone\portalstone.db`.
 
 ```sql
 -- reference

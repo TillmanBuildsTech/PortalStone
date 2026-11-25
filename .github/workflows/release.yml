@@ -63,6 +63,6 @@ jobs:
           if [[ "${{ steps.ver.outputs.prerelease }}" == "true" ]]; then PRE="--prerelease"; fi
           gh release create "$TAG" \
             "$ZIP" "$ZIP.sha256" \
-            --title "Portalstone $VER" \
+            --title "PortalStone $VER" \
             --generate-notes \
             $PRE

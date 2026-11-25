@@ -1,4 +1,4 @@
-# Releasing Portalstone
+# Releasing PortalStone
 
 How a build gets a version, reaches GitHub, and then reaches the services already running on
 people's machines. Three moving parts: a stamped version, a CI-published release, and the in-app
@@ -51,7 +51,7 @@ The channel is remembered in the database (`meta` key `update.channel`) and swit
 the bundle; its absence means a dev run, which the banner tells you to update via the installer). On
 click the service, as LocalSystem:
 
-1. downloads `portalstone-<version>.zip` to `%ProgramData%\Portalstone\staging\<version>\`,
+1. downloads `portalstone-<version>.zip` to `%ProgramData%\PortalStone\staging\<version>\`,
 2. verifies it against the published `.sha256`,
 3. extracts it with the bundled Windows `tar`,
 4. launches `updater.mjs` **detached from the staging copy** and returns the HTTP response.
@@ -60,7 +60,7 @@ click the service, as LocalSystem:
 copies the new build in (carrying `service.yaml` and `install.json` forward), and `serv start`s it.
 On any failure it restores the `.bak` and restarts the old build, so a bad swap can't leave the
 machine with no service. The banner polls `/api/update` throughout and reloads when the new build
-answers. Updater activity is logged to `%ProgramData%\Portalstone\logs\updater.log`.
+answers. Updater activity is logged to `%ProgramData%\PortalStone\logs\updater.log`.
 
 ## Non-Windows
 

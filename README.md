@@ -1,4 +1,4 @@
-# Portalstone
+# PortalStone
 
 A local-first World of Warcraft performance tracker. It reads what the game already writes
 (combat logs and addon SavedVariables) on your machine, turns it into a queryable store, and shows

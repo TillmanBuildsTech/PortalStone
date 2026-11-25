@@ -1,18 +1,18 @@
 --[[--------------------------------------------------------------------------
-Portalstone Sensor
+PortalStone Sensor
 
 One addon, every number the combat log cannot see.
 
 A combat log knows what you cast and what it hit. It does not know your talent
 tree, your gear, your professions, your lockouts, or how long you have played;
 none of that is in the format and no parser can recover it. This addon writes
-those numbers into its own SavedVariables file, which Portalstone already reads,
+those numbers into its own SavedVariables file, which PortalStone already reads,
 so the app stops guessing about the things it used to guess at.
 
 Rules this file follows, because the app depends on them:
 
   * It writes ONE global: PortalstoneDB. The one piece of client state it
-    changes is combat logging, which it keeps ON: the log is what Portalstone
+    changes is combat logging, which it keeps ON: the log is what PortalStone
     is built on, and a session the game did not log is a session that never
     happened as far as the app can tell. If another addon turns it off, it is
     back on within a few seconds. The player is different: /combatlog off is
@@ -24,7 +24,7 @@ Rules this file follows, because the app depends on them:
     fire there, and poking the API mid-fight is noise). A snapshot is deferred to
     the next out-of-combat tick instead of dropped.
   * It is push, not poll: the game flushes SavedVariables on logout and /reload,
-    which is exactly the cadence Portalstone samples at.
+    which is exactly the cadence PortalStone samples at.
   * `history` keeps the last HISTORY_MAX spec observations, because a respec
     that happens between two logouts is invisible otherwise.
 
@@ -405,7 +405,7 @@ local logReenabled = 0
 local logWarned = false
 
 local function say(msg)
-  if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalstone|r " .. msg) end
+  if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalStone|r " .. msg) end
 end
 
 local function addonLoaded(name)
@@ -449,7 +449,7 @@ local function holdCombatLog(now)
     logWarned = true
     say("another addon turned combat logging off; it is back on."
       .. (addonLoaded("AutoCombatLogger")
-        and " AutoCombatLogger only logs in instances and will keep doing this: disable it, Portalstone covers it."
+        and " AutoCombatLogger only logs in instances and will keep doing this: disable it, PortalStone covers it."
         or ""))
   end
 end
@@ -462,7 +462,7 @@ local function afterCombatLogCommand()
     DB.logDisabled = nil
     if DB.logPaused then
       DB.logPaused = nil
-      say("combat logging back on; Portalstone will keep it on again.")
+      say("combat logging back on; PortalStone will keep it on again.")
     end
     return
   end
@@ -583,7 +583,7 @@ frame:SetScript("OnUpdate", function()
   pendingReason = nil
   local ok, err = pcall(snapshot, reason or "tick")
   if not ok and DEFAULT_CHAT_FRAME then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff8080Portalstone|r sensor failed: " .. tostring(err))
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff8080PortalStone|r sensor failed: " .. tostring(err))
   end
 end)
 
@@ -606,7 +606,7 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
   end
   if msg == "log on" then
     DB.logDisabled = nil
-    say("combat logging re-enabled; Portalstone will keep it on and start a fresh file.")
+    say("combat logging re-enabled; PortalStone will keep it on and start a fresh file.")
     return
   end
   if msg == "log" then
@@ -623,8 +623,8 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
     local ok, err = pcall(snapshot, "manual")
     if DEFAULT_CHAT_FRAME then
       DEFAULT_CHAT_FRAME:AddMessage(
-        ok and "|cff8080ffPortalstone|r snapshot written; it lands in SavedVariables on /reload or logout."
-          or ("|cffff8080Portalstone|r failed: " .. tostring(err))
+        ok and "|cff8080ffPortalStone|r snapshot written; it lands in SavedVariables on /reload or logout."
+          or ("|cffff8080PortalStone|r failed: " .. tostring(err))
       )
     end
     return
@@ -637,7 +637,7 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
   local spec = char.spec or {}
   DEFAULT_CHAT_FRAME:AddMessage(
     string.format(
-      "|cff8080ffPortalstone|r %s · %s%s · ilvl %s · %s",
+      "|cff8080ffPortalStone|r %s · %s%s · ilvl %s · %s",
       tostring(char.meta and char.meta.level or "?"),
       tostring(spec.name or "no spec"),
       spec.build and (" (" .. spec.build .. ")") or "",
@@ -645,5 +645,5 @@ SlashCmdList["PORTALSTONESENSE"] = function(msg)
       tostring(char.meta and char.meta.zone or "?")
     )
   )
-  DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalstone|r /psense write forces a snapshot; /psense newlog starts a new combat log file; /psense log off stops forcing logging.")
+  DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffPortalStone|r /psense write forces a snapshot; /psense newlog starts a new combat log file; /psense log off stops forcing logging.")
 end

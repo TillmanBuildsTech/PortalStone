@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Swap an installed Portalstone build for a freshly downloaded one and restart the service.
+ * Swap an installed PortalStone build for a freshly downloaded one and restart the service.
  *
  * This is shipped inside each release and launched — detached — by the running service when the user
  * clicks "Update & restart". It must run from the staging copy, never from the install folder it is

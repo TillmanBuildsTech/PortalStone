@@ -461,18 +461,18 @@ export function page(title: string, body: string, opts: PageOptions = {}): strin
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${refresh}
 <link rel="icon" href="${FAVICON}">
-<title>${esc(title)} · Portalstone</title><style>${CSS}</style>${styles}${scripts}</head>
+<title>${esc(title)} · PortalStone</title><style>${CSS}</style>${styles}${scripts}</head>
 <body><header><div class="bar">
 <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation menu">
 <label for="nav-toggle" class="hamburger" aria-hidden="true"><span></span><span></span><span></span></label>
-<a class="brand" href="/">${BRAND_MARK}Portalstone</a>
+<a class="brand" href="/">${BRAND_MARK}PortalStone</a>
 <div class="hdr-right">${switcher}<div class="status">${status}</div></div>
 <label for="nav-toggle" class="nav-scrim" aria-hidden="true"></label>
 <nav aria-label="Primary"><div class="nav-head"><span class="nav-title">Menu</span>
 <label for="nav-toggle" class="nav-close" aria-label="Close menu">&#10005;</label></div>${nav}</nav>
 </div></header>${opts.ctx?.update ? updateBanner(opts.ctx.update) : ''}
 <main>${body}</main>
-<footer>Portalstone v${esc(VERSION)} · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
+<footer>PortalStone v${esc(VERSION)} · read from your own combat logs · nothing leaves this machine</footer></body></html>`;
 }
 
 /**
@@ -515,7 +515,7 @@ export function updateBanner(u: UpdateState): string {
     ? `<form method="post" action="/api/update/apply"><button type="submit" class="linkbtn">Update &amp; restart</button></form>`
     : `<span class="ver">run the installer to update</span>`;
   return `<div class="update-bar"><div class="inner">
-    <span class="msg"><b>Portalstone v${esc(l.version)}</b> is available${beta}</span>
+    <span class="msg"><b>PortalStone v${esc(l.version)}</b> is available${beta}</span>
     <span class="ver">you're on v${esc(u.current)}</span>
     <span class="actions"><a href="${esc(l.url)}" target="_blank" rel="noopener">View changes</a>${action}</span>
   </div></div>`;

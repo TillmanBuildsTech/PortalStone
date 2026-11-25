@@ -11,7 +11,7 @@ answers off the machine, and one keeps them on it. Everything else is cost and c
 ## The shape they all share
 
 None of these is a new data source. They are **frontends of one agent-side "chat brain"**: Claude,
-with the Portalstone MCP tools (`docs/MCP-PLAN.md`) attached, running in the agent process — which
+with the PortalStone MCP tools (`docs/MCP-PLAN.md`) attached, running in the agent process — which
 already runs as an always-on Windows service (`docs/SERVICE.md`). The brain is built once and is
 transport-agnostic; a client is a thin thing that carries text to it and renders text back.
 
@@ -97,7 +97,7 @@ overkill-fast for text. The real gotchas are window behaviour, not frame cost:
 
 This is the decision; the rest is detail.
 
-Portalstone's contract (README) is *"nothing leaves the machine unless you explicitly share a
+PortalStone's contract (README) is *"nothing leaves the machine unless you explicitly share a
 coarsened summary."* A **Discord bot breaks that**: your questions and Claude's answers — which will
 carry SavedVariables-derived data (gold, gear, specs) — transit Discord's servers (US cloud, logged,
 retained). For a solo private-server player that may be perfectly acceptable, but it is a real
@@ -109,7 +109,7 @@ the reason to keep the brain transport-agnostic rather than wiring it to Discord
 
 ## Recommended order
 
-1. **Build the agent-side chat brain once** — Claude + the Portalstone MCP tools, behind a transport
+1. **Build the agent-side chat brain once** — Claude + the PortalStone MCP tools, behind a transport
    the clients share (the MCP plan's deferred HTTP transport). Every client below is thin after this.
 2. **Discord bot as frontend #1.** Highest leverage for the stated wants — in-game + mobile +
    cross-platform — at near-zero overlay cost, *if* the privacy tradeoff is acceptable to you.

@@ -106,7 +106,7 @@ function serviceYaml() {
   const node = process.execPath;
   return [
     `name: ${name}`,
-    `display_name: "Portalstone"`,
+    `display_name: "PortalStone"`,
     `description: "Local World of Warcraft performance tracker — http://127.0.0.1:${port}"`,
     `executable: ${q(node)}`,
     'arguments:',

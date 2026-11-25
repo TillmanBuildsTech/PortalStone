@@ -1,4 +1,4 @@
-# Running Portalstone as a service
+# Running PortalStone as a service
 
 The agent was written to be run by hand (`npm run mvp`). This is the other mode: a release build
 that runs on plain Node, installed as a Windows service so it is always there when you log out of
@@ -41,7 +41,7 @@ Needs an administrator shell. `scripts\install-service.cmd` re-launches itself t
 
 It then:
 
-1. copies `dist/portalstone/` to `%ProgramFiles%\Portalstone\`,
+1. copies `dist/portalstone/` to `%ProgramFiles%\PortalStone\`,
 2. writes `%ProgramData%\serv\portalstone\config.yaml` (and a copy next to the install),
 3. installs and starts the service, and waits until `http://127.0.0.1:48120/` answers.
 
@@ -49,15 +49,15 @@ Re-running it is safe: an existing `portalstone` service is stopped and removed 
 only rewrites a definition from its own flags.
 
     npm run service:install -- --print       # show the config and where things would go, change nothing
-    npm run service:install -- --port 48121 --db "C:/ProgramData/Portalstone/portalstone.db"
+    npm run service:install -- --port 48121 --db "C:/ProgramData/PortalStone/portalstone.db"
 
 Defaults, and why:
 
 | | |
 |---|---|
 | account | `LocalSystem` — it must read the game folder and SavedVariables without holding anyone's password; the UI binds to `127.0.0.1` only |
-| database | the existing per-user `%LOCALAPPDATA%\Portalstone\portalstone.db` when there is one, so history carries over; otherwise `%PROGRAMDATA%\Portalstone\portalstone.db` |
-| logs | `%PROGRAMDATA%\Portalstone\logs\portalstone.log`, rotated at 5 MB / 7 days, timestamped |
+| database | the existing per-user `%LOCALAPPDATA%\PortalStone\portalstone.db` when there is one, so history carries over; otherwise `%PROGRAMDATA%\PortalStone\portalstone.db` |
+| logs | `%PROGRAMDATA%\PortalStone\logs\portalstone.log`, rotated at 5 MB / 7 days, timestamped |
 | restart | backoff from 5s to 2m on any non-zero exit; exit 0 means "asked to stop", no restart |
 | start type | `auto` (starts at boot) |
 
@@ -66,7 +66,7 @@ Defaults, and why:
     serv status portalstone
     serv stop portalstone
     serv start portalstone
-    serv remove portalstone        # uninstall; add `rmdir /s "C:\Program Files\Portalstone"` to clean up
+    serv remove portalstone        # uninstall; add `rmdir /s "C:\Program Files\PortalStone"` to clean up
 
 Use `serv stop` then `serv start` rather than `serv restart`: on the serv release installed here
 (0.1.7) `restart` stops the service and then fails to start it again with "service is already
@@ -75,7 +75,7 @@ itself, so re-running it is also a valid way to restart on a fresh build.
 
 The service log is the app's own stdout/stderr, line-buffered by serv:
 
-    Get-Content "C:\ProgramData\Portalstone\logs\portalstone.log" -Tail 40 -Wait
+    Get-Content "C:\ProgramData\PortalStone\logs\portalstone.log" -Tail 40 -Wait
 
 ## Things worth knowing
 

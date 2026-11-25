@@ -1,5 +1,5 @@
 /**
- * Portalstone core — public surface.
+ * PortalStone core — public surface.
  *
  * Pure data: no filesystem watching, no SQLite, no HTTP. The agent and the browser both import
  * this; anything that needs a platform API lives outside.

@@ -1019,7 +1019,7 @@ export function startServer(store: Store, installs: InstallInfo[], opts: ServerO
 /**
  * Resolves once the server is listening; rejects with a readable reason when it cannot.
  *
- * The usual failure is another Portalstone already on the port (the service, while a dev run
+ * The usual failure is another PortalStone already on the port (the service, while a dev run
  * starts). Knowing that before the first scan matters: a second agent that scans first writes the
  * same rows as the first, and only then discovers it has nowhere to serve them.
  */
@@ -1030,7 +1030,7 @@ export function listening(server: Server, port: number): Promise<void> {
       reject(
         err.code === 'EADDRINUSE'
           ? new Error(
-              `port ${port} is already in use — another Portalstone (the service?) is probably running. ` +
+              `port ${port} is already in use — another PortalStone (the service?) is probably running. ` +
                 'Stop it (serv stop portalstone) or pass --port.',
             )
           : err,

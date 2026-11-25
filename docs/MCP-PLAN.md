@@ -1,6 +1,6 @@
 # MCP server plan: `packages/mcp`
 
-Expose Portalstone's SavedVariables- and combat-log-derived data to an MCP client (Claude Desktop,
+Expose PortalStone's SavedVariables- and combat-log-derived data to an MCP client (Claude Desktop,
 Claude Code, any MCP host) as **read-only tools**, so you can ask natural-language questions —
 "how much gold did my paladin make last session", "what was my ilvl trend this week", "which addon
 exposes money" — and get answers grounded in the exact data the app already holds.
@@ -73,7 +73,7 @@ instead by the agent optionally hosting MCP-over-HTTP itself (§3), still backed
 
 - **v1: stdio.** `@modelcontextprotocol/sdk` `StdioServerTransport`. This is what Claude Desktop and
   Claude Code launch directly — one process per session, no port, no auth surface, local-only by
-  construction, which matches Portalstone's "nothing leaves the machine" posture.
+  construction, which matches PortalStone's "nothing leaves the machine" posture.
 
   User wiring (Claude Desktop `claude_desktop_config.json`, or Claude Code `.mcp.json`):
 
@@ -170,7 +170,7 @@ it takes arguments.
 
 State this prominently in the server's top-level description and the README:
 
-> MCP exposes the data Portalstone already derives from **combat logs + addon SavedVariables on
+> MCP exposes the data PortalStone already derives from **combat logs + addon SavedVariables on
 > this machine**. It does not call the WoW client, does not bypass the addon sandbox, and cannot
 > read anything the sensor addon or a third-party addon did not already write. It reads the same
 > files the web UI reads.
@@ -202,7 +202,7 @@ To publish (documented future step):
    "reads as data, never executes" guarantee front and centre.
 3. Then the MCP server becomes a thin, open-sourceable layer: "point it at any addon's
    SavedVariables, get an MCP tool surface." The generic version of `portalstone_addon_detail`
-   (shape of any file) is the reusable core tool; the session/gold tools are Portalstone-specific
+   (shape of any file) is the reusable core tool; the session/gold tools are PortalStone-specific
    and stay here.
 
 Not v1 scope: v1 keeps `core` private and in-repo.

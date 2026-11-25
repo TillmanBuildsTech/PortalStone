@@ -14,7 +14,7 @@ survives contact with a real install. Everything else is additive.
 | --- | --- |
 | Discovery | Finds `_forever_` (and any other flavor) on every drive, plus the account's SavedVariables. Read-only; it never writes inside the game directory. |
 | Ingest | Combat log → sessions, incremental by byte offset, resumable across restarts. Re-reads only the session still in progress. |
-| Storage | One SQLite file at `%LOCALAPPDATA%\Portalstone\portalstone.db`: sessions, encounters, damage-by-ability, per-log ingest state. |
+| Storage | One SQLite file at `%LOCALAPPDATA%\PortalStone\portalstone.db`: sessions, encounters, damage-by-ability, per-log ingest state. |
 | UI | Server-rendered pages at `127.0.0.1:48120`: sessions, one session with a run timeline, one run per zone visit, runs, bags, addons, tracked values, dashboards, diagnostics. Inline SVG charts, no build step. |
 | Dashboards | Named views the user builds: each card picks a data source (a combat trend, a zone breakdown, bag drops, a tracked addon property), a view (static value, bar, pie, line, table) and a time window (15 minutes to 30 days, or all time). Cards are dragged and resized on a 12-column gridstack layout that saves itself, edited in place, and previewed before saving. Stored locally in SQLite; `GET /api/dashboard?id=` exposes the same numbers as JSON. See `docs/DASHBOARDS.md`. |
 | Addons | Base SavedVariables adapter, `_forever_` only for now. Split into **configured** (a tracked value reads from it, listed with those values) and **available to configure** (readable data, nothing tracked yet), with the file's own state alongside (`in use` / `idle` / `no data` / `unreadable`) and the every-property browser behind each row. See `docs/SAVEDVARS.md`. |
