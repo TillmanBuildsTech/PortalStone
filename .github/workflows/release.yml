@@ -49,7 +49,9 @@ jobs:
           # straight into the install folder.
           ( cd dist/portalstone && zip -r "../../$ZIP" . )
           sha256sum "$ZIP" | awk '{print $1}' > "$ZIP.sha256"
-          echo "zip=$ZIP" >> "$GITHUB_ENV"
+          # Carry the names to the publish step. Env var names are case-sensitive: the publish step
+          # references $ZIP, so export it uppercase.
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
       - name: Publish the GitHub Release
         env:
