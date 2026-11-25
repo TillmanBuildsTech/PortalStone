@@ -69,8 +69,11 @@ if (pkg.version !== version) {
 } else {
   process.stdout.write(`  package.json already at ${version}; tagging the current commit\n`);
 }
-git(['tag', tag]);
-git(['push', '--follow-tags']);
+// An annotated tag (-a), and push it by name: `--follow-tags` pushes only annotated tags, and even
+// then a lightweight tag would be skipped — so push the branch and the tag itself, explicitly.
+git(['tag', '-a', tag, '-m', `Portalstone ${version}`]);
+git(['push', 'origin', 'HEAD']);
+git(['push', 'origin', tag]);
 
 process.stdout.write(`\nPushed ${tag}. CI will build and publish the release:\n`);
 process.stdout.write('  https://github.com/TillmanBuildsTech/PortalStone/actions\n');
