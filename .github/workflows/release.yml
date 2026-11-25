@@ -53,6 +53,14 @@ jobs:
           # references $ZIP, so export it uppercase.
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
+      - name: Package the addon as a separate download
+        run: |
+          # The addon is its own artifact: a PortalStoneSense/ folder the player drops into
+          # Interface\AddOns, with the release version stamped into its .toc.
+          npm run addon:package
+          VER="${{ steps.ver.outputs.version }}"
+          echo "ADDON_ZIP=dist/PortalStoneSense-$VER.zip" >> "$GITHUB_ENV"
+
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,6 +71,7 @@ jobs:
           if [[ "${{ steps.ver.outputs.prerelease }}" == "true" ]]; then PRE="--prerelease"; fi
           gh release create "$TAG" \
             "$ZIP" "$ZIP.sha256" \
+            "$ADDON_ZIP" "$ADDON_ZIP.sha256" \
             --title "PortalStone $VER" \
             --generate-notes \
             $PRE

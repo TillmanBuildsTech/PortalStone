@@ -16,7 +16,8 @@
     "mvp": "tsx packages/agent/src/main.ts --open",
     "scan": "tsx packages/agent/src/main.ts --once",
     "rebuild": "tsx packages/agent/src/main.ts --once --rebuild",
-    "addon:install": "node scripts/install-addon.mjs"
+    "addon:install": "node scripts/install-addon.mjs",
+    "addon:package": "node scripts/package-addon.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

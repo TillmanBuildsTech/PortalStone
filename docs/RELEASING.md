@@ -23,14 +23,36 @@ Versions are [semver](https://semver.org). **Betas are prereleases**: a tag with
 
 Pushing the `v*` tag triggers `.github/workflows/release.yml` on GitHub Actions, which:
 
-1. runs `npm run typecheck` and `npm test` as a gate,
+1. runs `npm run typecheck` and `npm test` as a gate (which includes the addon's Lua syntax and
+   runtime tests),
 2. builds with `PORTALSTONE_VERSION` set from the tag,
 3. zips the contents of `dist/portalstone/` into `portalstone-<version>.zip` (+ a `.sha256`),
-4. publishes the GitHub Release — marked **prerelease** when the tag has a hyphen — with those two
+4. packages the addon separately into `PortalStoneSense-<version>.zip` (+ a `.sha256`) via
+   `npm run addon:package` (see below),
+5. publishes the GitHub Release — marked **prerelease** when the tag has a hyphen — with all four
    assets attached and auto-generated notes.
 
 You can also tag by hand (`git tag v0.1.0 && git push --follow-tags`); the helper just keeps
 `package.json` in step and refuses a dirty tree. CI is the only thing that builds the artifact.
+
+## The addon download
+
+The in-game addon (`PortalStoneSense`) ships as its own release asset, because it installs somewhere
+the app never touches — the game's `Interface\AddOns`, not Program Files — and a player may want it
+without running the service, or vice versa.
+
+    npm run addon:package      # → dist/PortalStoneSense-<version>.zip (+ .sha256)
+
+The zip holds a single `PortalStoneSense/` folder (the layout WoW expects) with the release version
+stamped into the `.toc`'s `## Version:` line, so the in-game addon list matches the download. The
+addon source keeps its own placeholder version; only the packaged copy is pinned. The version is
+resolved by `scripts/lib/version.mjs` — the same resolver the app build uses — so the two downloads
+in a release always carry the same number.
+
+A player installs it by unzipping into `World of Warcraft\_<flavor>_\Interface\AddOns` and running
+`/reload`. (On your own machine, `npm run addon:install` copies it straight in from source instead.)
+The app does not update the addon: it is read-only toward the game folder, so a new addon version is
+a manual re-download, same as any other WoW addon.
 
 ## How updates reach users
 

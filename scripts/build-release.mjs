@@ -17,11 +17,11 @@
  * native dependency to carry and nothing to compile on install.
  */
 import { build } from 'esbuild';
-import { execFileSync } from 'node:child_process';
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveVersion } from './lib/version.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'dist', 'portalstone');
@@ -30,30 +30,9 @@ const require = createRequire(join(root, 'package.json'));
 
 const kb = (bytes) => `${(bytes / 1024).toFixed(1)} KB`;
 
-/**
- * The version baked into the bundle. The git tag is the source of truth: CI sets PORTALSTONE_VERSION
- * from the tag it is building, so the artifact and the tag can never disagree. A local build without
- * that env falls back to the nearest tag, then to the version in package.json, then to a dev marker
- * (which the updater treats as "running from source, never offer an update").
- */
-async function resolveVersion() {
-  if (process.env.PORTALSTONE_VERSION) return process.env.PORTALSTONE_VERSION.replace(/^v/, '');
-  try {
-    const described = execFileSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: root, encoding: 'utf8' });
-    if (described.trim()) return described.trim().replace(/^v/, '');
-  } catch {
-    /* no tags yet, or not a git checkout */
-  }
-  try {
-    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-    if (pkg.version && pkg.version !== '0.0.0') return pkg.version;
-  } catch {
-    /* fall through to the dev marker */
-  }
-  return '0.0.0-dev';
-}
-
-const version = await resolveVersion();
+// The version baked into the bundle, resolved the same way the addon package resolves its own (see
+// scripts/lib/version.mjs) so the two downloads a release ships always carry the same number.
+const version = await resolveVersion(root);
 
 async function sizeOf(path) {
   try {

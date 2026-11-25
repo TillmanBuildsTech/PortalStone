@@ -48,6 +48,13 @@ describe('PortalStoneSense addon', () => {
     expect(declared).toEqual(['PortalStoneDB']);
   });
 
+  it('carries a "## Version:" line for the packager to stamp', () => {
+    // scripts/package-addon.mjs rewrites this line with the release version. If the field ever goes
+    // missing, the stamp would silently no-op and the in-game list would disagree with the download.
+    const toc = readFileSync(TOC_PATH, 'utf8');
+    expect(toc).toMatch(/^## Version: .+$/m);
+  });
+
   it('parses as Lua 5.1, which is what an era client runs', () => {
     expect(() => parse()).not.toThrow();
   });
