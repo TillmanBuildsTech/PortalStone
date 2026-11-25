@@ -42,7 +42,7 @@ function flag(name: string): boolean {
 function defaultDbPath(): string {
   const base =
     process.env.LOCALAPPDATA ?? process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
-  return join(base, 'Portalstone', 'portalstone.db');
+  return join(base, 'PortalStone', 'portalstone.db');
 }
 
 function openBrowser(url: string): void {

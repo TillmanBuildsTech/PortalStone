@@ -7,8 +7,8 @@ professions, no lockouts and no played time — 41 event types, checked against 
 `_forever_` logs. Everything PortalStone says about those things today is either an inference from
 abilities or a third-party addon's opinion about its own user.
 
-This addon closes that gap with one file we control. It writes `PortalstoneDB` to
-`WTF/Account/<account>/SavedVariables/PortalstoneSense.lua` on the game's own flush cadence
+This addon closes that gap with one file we control. It writes `PortalStoneDB` to
+`WTF/Account/<account>/SavedVariables/PortalStoneSense.lua` on the game's own flush cadence
 (logout, `/reload`, exit), and `packages/agent/src/sensor.ts` projects it onto the sensor page and
 onto tracked series.
 
@@ -41,7 +41,7 @@ You still decide:
   back on by hand also clears a `/psense log off` opt-out. Anything played while it's off never
   reaches PortalStone.
 
-The installer copies two files into `Interface/AddOns/PortalstoneSense`. It never touches `WTF` —
+The installer copies two files into `Interface/AddOns/PortalStoneSense`. It never touches `WTF` —
 SavedVariables belong to the game. The agent itself never writes to the game directory at all; only
 this explicit command does.
 
@@ -63,7 +63,7 @@ this explicit command does.
 
 ## Design rules
 
-- **One global.** `PortalstoneDB`, nothing else.
+- **One global.** `PortalStoneDB`, nothing else.
 - **Every API is guarded.** Era clients, retail clients and custom servers disagree about which
   functions exist. A missing function must be an absent field, never an error mid-snapshot: an addon
   that throws stops writing data, and then the app silently has none.
@@ -77,7 +77,7 @@ this explicit command does.
 ## Schema
 
 ```
-PortalstoneDB = {
+PortalStoneDB = {
   schema = 2,
   updated = <epoch>,
   chars = {

@@ -189,7 +189,7 @@ export async function applyUpdate(
   if (!latest.zipUrl) throw new Error('release has no downloadable build');
 
   const programData = process.env.ProgramData ?? 'C:\\ProgramData';
-  const staging = join(programData, 'Portalstone', 'staging', latest.version);
+  const staging = join(programData, 'PortalStone', 'staging', latest.version);
   const extracted = join(staging, 'build');
   const zipPath = join(staging, `portalstone-${latest.version}.zip`);
 

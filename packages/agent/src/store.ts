@@ -747,6 +747,14 @@ export class Store {
       this.mergeAccountSamples();
       this.setMeta('samples_cross_account', '1');
     }
+    // The sensor addon and its global were renamed Portalstone* → PortalStone*. Tracked series seeded
+    // from the old names carry the old strings; rewrite them so the series continue rather than being
+    // re-seeded as duplicates beside the originals. Samples key on metric_id, so they need no change.
+    if (this.meta('rename_portalstone_sensor') === null) {
+      this.db.prepare("UPDATE tracked_metric SET addon_file = 'PortalStoneSense.lua' WHERE addon_file = 'PortalstoneSense.lua'").run();
+      this.db.prepare("UPDATE tracked_metric SET global_name = 'PortalStoneDB' WHERE global_name = 'PortalstoneDB'").run();
+      this.setMeta('rename_portalstone_sensor', '1');
+    }
   }
 
   /**

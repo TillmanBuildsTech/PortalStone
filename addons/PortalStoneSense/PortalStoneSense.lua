@@ -11,7 +11,7 @@ so the app stops guessing about the things it used to guess at.
 
 Rules this file follows, because the app depends on them:
 
-  * It writes ONE global: PortalstoneDB. The one piece of client state it
+  * It writes ONE global: PortalStoneDB. The one piece of client state it
     changes is combat logging, which it keeps ON: the log is what PortalStone
     is built on, and a session the game did not log is a session that never
     happened as far as the app can tell. If another addon turns it off, it is
@@ -35,14 +35,14 @@ combat logging — a durable opt-out that survives /reload and login, for when
 you want to run with logging fully off) and /psense log on (resume).
 --]]--------------------------------------------------------------------------
 
-local ADDON = "PortalstoneSense"
+local ADDON = "PortalStoneSense"
 local SCHEMA = 2
 local HISTORY_MAX = 40
 
 -- A placeholder until ADDON_LOADED: the client loads SavedVariables after this
 -- file runs and replaces the global, so the saved table is rebound there.
-PortalstoneDB = PortalstoneDB or {}
-local DB = PortalstoneDB
+PortalStoneDB = PortalStoneDB or {}
+local DB = PortalStoneDB
 DB.schema = SCHEMA
 DB.chars = DB.chars or {}
 
@@ -530,8 +530,8 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2)
     -- The saved table has replaced the placeholder global by now (or, on a
     -- first run, there was none and the placeholder stands). Without this
     -- rebind every write lands in the placeholder and the file never changes.
-    PortalstoneDB = PortalstoneDB or DB
-    DB = PortalstoneDB
+    PortalStoneDB = PortalStoneDB or DB
+    DB = PortalStoneDB
     DB.schema = SCHEMA
     DB.chars = DB.chars or {}
     hookCombatLogCommand()

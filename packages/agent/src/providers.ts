@@ -30,7 +30,7 @@ export const PROVIDERS: Record<string, ProviderNote> = {
   // Our own addon. It exists for the capabilities no other file can supply: the combat log has no
   // talent event, no gear, no professions and no lockouts, and third-party rosters only know their
   // own members. See docs/SENSOR.md.
-  'PortalstoneSense.lua': {
+  'PortalStoneSense.lua': {
     id: 'addon.ours',
     caps: ['character.spec', 'character.gear', 'character.played', 'profession.skills', 'instance.lockouts', 'roster.group'],
   },

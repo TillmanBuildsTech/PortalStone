@@ -10,9 +10,9 @@
  *
  * Options
  *   --db <path>      database to run against (default: the one this user already has, so history
- *                    carries over; otherwise %PROGRAMDATA%\Portalstone\portalstone.db)
+ *                    carries over; otherwise %PROGRAMDATA%\PortalStone\portalstone.db)
  *   --port <n>       port to serve on (default 48120)
- *   --target <dir>   where the release is installed (default %ProgramFiles%\Portalstone)
+ *   --target <dir>   where the release is installed (default %ProgramFiles%\PortalStone)
  *   --name <name>    service name (default portalstone)
  *   --print          stop after writing the config
  *
@@ -40,18 +40,18 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const name = arg('name', 'portalstone');
 const port = Number(arg('port', '48120'));
 const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
-const target = resolve(arg('target', join(programFiles, 'Portalstone')));
+const target = resolve(arg('target', join(programFiles, 'PortalStone')));
 const programData = process.env.ProgramData ?? 'C:\\ProgramData';
-const logDir = join(programData, 'Portalstone', 'logs');
+const logDir = join(programData, 'PortalStone', 'logs');
 const logFile = join(logDir, `${name}.log`);
 const configPath = join(programData, 'serv', name, 'config.yaml');
 const dryRun = flag('print');
 
 /** The user's existing database, when there is one: a service should not silently start over. */
 function defaultDb() {
-  const mine = join(process.env.LOCALAPPDATA ?? '', 'Portalstone', 'portalstone.db');
+  const mine = join(process.env.LOCALAPPDATA ?? '', 'PortalStone', 'portalstone.db');
   if (process.env.LOCALAPPDATA && existsSync(mine)) return mine;
-  return join(programData, 'Portalstone', 'portalstone.db');
+  return join(programData, 'PortalStone', 'portalstone.db');
 }
 const dbPath = resolve(arg('db', defaultDb()));
 

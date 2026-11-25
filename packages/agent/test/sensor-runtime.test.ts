@@ -13,7 +13,7 @@ import { LuaFactory, type LuaEngine } from 'wasmoon';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ADDON = readFileSync(resolve(HERE, '..', '..', '..', 'addons', 'PortalstoneSense', 'PortalstoneSense.lua'), 'utf8');
+const ADDON = readFileSync(resolve(HERE, '..', '..', '..', 'addons', 'PortalStoneSense', 'PortalStoneSense.lua'), 'utf8');
 
 /**
  * Just enough client. `now` is the clock the test advances; `logging` is the client's combat log
@@ -74,8 +74,8 @@ async function boot(saved: string | null = null): Promise<LuaEngine> {
   lua = await new LuaFactory().createEngine();
   await lua.doString(CLIENT);
   await lua.doString(ADDON);
-  if (saved !== null) await lua.doString(`PortalstoneDB = ${saved}`);
-  await lua.doString(`fire("ADDON_LOADED", "PortalstoneSense"); fire("PLAYER_ENTERING_WORLD", true, false)`);
+  if (saved !== null) await lua.doString(`PortalStoneDB = ${saved}`);
+  await lua.doString(`fire("ADDON_LOADED", "PortalStoneSense"); fire("PLAYER_ENTERING_WORLD", true, false)`);
   return lua;
 }
 
@@ -89,20 +89,20 @@ afterEach(() => {
   lua = null;
 });
 
-describe('PortalstoneSense at runtime', () => {
+describe('PortalStoneSense at runtime', () => {
   it('writes into the SavedVariables table the client loaded, not the placeholder', async () => {
     await boot(`{ schema = 1, chars = { Dead = { meta = { name = "Dead", realm = "Realm A", updated = 1 } } } }`);
     await run('tick(3)');
-    expect(await get('PortalstoneDB.schema')).toBe(2);
-    expect(await get('PortalstoneDB.chars["Dead"]')).toBeNull();
-    expect(await get('PortalstoneDB.chars["Dead-Realm A"].meta.updated > 1')).toBe(true);
-    expect(await get('PortalstoneDB.chars["Dead-Realm A"].meta.guid')).toBe('Player-6934-0194514D');
+    expect(await get('PortalStoneDB.schema')).toBe(2);
+    expect(await get('PortalStoneDB.chars["Dead"]')).toBeNull();
+    expect(await get('PortalStoneDB.chars["Dead-Realm A"].meta.updated > 1')).toBe(true);
+    expect(await get('PortalStoneDB.chars["Dead-Realm A"].meta.guid')).toBe('Player-6934-0194514D');
   });
 
   it('writes on a first run, when there is no saved table', async () => {
     await boot();
     await run('tick(3)');
-    expect(await get('PortalstoneDB.chars["Dead-Realm A"].meta.name')).toBe('Dead');
+    expect(await get('PortalStoneDB.chars["Dead-Realm A"].meta.name')).toBe('Dead');
   });
 
   it('turns combat logging on, and back on after another addon turns it off', async () => {
@@ -118,12 +118,12 @@ describe('PortalstoneSense at runtime', () => {
     await boot();
     await run('tick(1); typed("/COMBATLOG"); tick(10)');
     expect(await get('logging')).toBe(false);
-    expect(await get('PortalstoneDB.logPaused')).toBe(true);
+    expect(await get('PortalStoneDB.logPaused')).toBe(true);
     expect(await get('said("stays off until you type /combatlog again")')).toBe(true);
 
     await run('typed("/COMBATLOG"); tick(1)');
     expect(await get('logging')).toBe(true);
-    expect(await get('PortalstoneDB.logPaused')).toBeNull();
+    expect(await get('PortalStoneDB.logPaused')).toBeNull();
     // An addon turning it off after that is not the player: the hold is back.
     await run('LoggingCombat(false); tick(3)');
     expect(await get('logging')).toBe(true);
@@ -158,7 +158,7 @@ describe('PortalstoneSense at runtime', () => {
     await boot();
     await run('tick(1); typed("/COMBATLOG"); SlashCmdList.PORTALSTONESENSE("newlog"); tick(2)');
     expect(await get('logging')).toBe(true);
-    expect(await get('PortalstoneDB.logPaused')).toBeNull();
+    expect(await get('PortalStoneDB.logPaused')).toBeNull();
   });
 
   it('/psense log off is a durable opt-out: logging stays off through a /reload', async () => {
@@ -167,7 +167,7 @@ describe('PortalstoneSense at runtime', () => {
     expect(await get('logging')).toBe(true);
     await run('SlashCmdList.PORTALSTONESENSE("log off"); tick(5)');
     expect(await get('logging')).toBe(false);
-    expect(await get('PortalstoneDB.logDisabled')).toBe(true);
+    expect(await get('PortalStoneDB.logDisabled')).toBe(true);
     // Unlike a /combatlog pause, the opt-out survives a login (isInitialLogin true).
     await run('fire("PLAYER_ENTERING_WORLD", true, false); tick(5)');
     expect(await get('logging')).toBe(false);
@@ -180,16 +180,16 @@ describe('PortalstoneSense at runtime', () => {
     expect(await get('logging')).toBe(false);
     await run('SlashCmdList.PORTALSTONESENSE("log on"); tick(3)');
     expect(await get('logging')).toBe(true);
-    expect(await get('PortalstoneDB.logDisabled')).toBeNull();
+    expect(await get('PortalStoneDB.logDisabled')).toBeNull();
   });
 
   it('typing /combatlog back on clears a /psense opt-out', async () => {
     await boot();
     await run('SlashCmdList.PORTALSTONESENSE("log off"); tick(3)');
-    expect(await get('PortalstoneDB.logDisabled')).toBe(true);
+    expect(await get('PortalStoneDB.logDisabled')).toBe(true);
     // The player re-enabling logging by hand plainly no longer wants the opt-out.
     await run('typed("/COMBATLOG"); tick(1)');
     expect(await get('logging')).toBe(true);
-    expect(await get('PortalstoneDB.logDisabled')).toBeNull();
+    expect(await get('PortalStoneDB.logDisabled')).toBeNull();
   });
 });

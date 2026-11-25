@@ -46,13 +46,13 @@ function installWith(name: string, body: string): InstallInfo {
             savedVariables: [{ name, bytes: st.size, mtimeMs: Math.round(st.mtimeMs) }],
           },
         ],
-        addons: ['PortalstoneSense'],
+        addons: ['PortalStoneSense'],
       },
     ],
   };
 }
 
-const SENSOR = `PortalstoneDB = {
+const SENSOR = `PortalStoneDB = {
 ["schema"] = 1,
 ["updated"] = 1794790000,
 ["chars"] = {
@@ -124,7 +124,7 @@ const SENSOR = `PortalstoneDB = {
 `;
 
 /** A client that had no talents API and no gear API: the sections are simply absent. */
-const SPARSE = `PortalstoneDB = {
+const SPARSE = `PortalStoneDB = {
 ["schema"] = 1,
 ["chars"] = {
 ["Slouch Mage"] = {

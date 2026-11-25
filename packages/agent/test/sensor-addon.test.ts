@@ -13,9 +13,9 @@ const luaparse = require('luaparse') as {
 type LuaNode = { type: string; [key: string]: unknown };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ADDON_DIR = resolve(HERE, '..', '..', '..', 'addons', 'PortalstoneSense');
-const LUA_PATH = join(ADDON_DIR, 'PortalstoneSense.lua');
-const TOC_PATH = join(ADDON_DIR, 'PortalstoneSense.toc');
+const ADDON_DIR = resolve(HERE, '..', '..', '..', 'addons', 'PortalStoneSense');
+const LUA_PATH = join(ADDON_DIR, 'PortalStoneSense.lua');
+const TOC_PATH = join(ADDON_DIR, 'PortalStoneSense.toc');
 
 function walk(node: unknown, visit: (n: LuaNode) => void): void {
   if (Array.isArray(node)) {
@@ -34,18 +34,18 @@ function parse(): LuaNode {
   return luaparse.parse(readFileSync(LUA_PATH, 'utf8'), { luaVersion: '5.1', locations: false });
 }
 
-describe('PortalstoneSense addon', () => {
+describe('PortalStoneSense addon', () => {
   it('ships a .toc that loads the Lua and declares exactly one SavedVariables global', () => {
     expect(existsSync(TOC_PATH)).toBe(true);
     const toc = readFileSync(TOC_PATH, 'utf8');
     expect(toc).toMatch(/^## Interface: \d+/m);
-    expect(toc).toMatch(/^## SavedVariables: PortalstoneDB$/m);
-    expect(toc).toMatch(/^PortalstoneSense\.lua$/m);
+    expect(toc).toMatch(/^## SavedVariables: PortalStoneDB$/m);
+    expect(toc).toMatch(/^PortalStoneSense\.lua$/m);
     // A .toc naming more than one global is a second file the app has to learn to read.
     const declared = [...toc.matchAll(/^## SavedVariables(?:PerCharacter)?: (.+)$/gm)].flatMap((m) =>
       m[1]!.split(',').map((s) => s.trim()),
     );
-    expect(declared).toEqual(['PortalstoneDB']);
+    expect(declared).toEqual(['PortalStoneDB']);
   });
 
   it('parses as Lua 5.1, which is what an era client runs', () => {
@@ -76,7 +76,7 @@ describe('PortalstoneSense addon', () => {
         if (v.type === 'Identifier') names.add(String(v.name));
       }
     });
-    expect([...names].filter((n) => !locals.has(n)).sort()).toEqual(['PortalstoneDB', 'SLASH_PORTALSTONESENSE1']);
+    expect([...names].filter((n) => !locals.has(n)).sort()).toEqual(['PortalStoneDB', 'SLASH_PORTALSTONESENSE1']);
   });
 
   it('calls every client API through the guarded wrapper', () => {

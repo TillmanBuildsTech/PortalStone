@@ -23,7 +23,7 @@ capability allows.
 | question | answered by | where |
 |---|---|---|
 | what happened, when, to whom | combat log | `packages/core/src/combatlog` |
-| what spec, gear, professions, lockouts, played time | sensor addon | `addons/PortalstoneSense` |
+| what spec, gear, professions, lockouts, played time | sensor addon | `addons/PortalStoneSense` |
 | what it means together | the app | `packages/agent` |
 
 The addon is push-only. The game flushes SavedVariables on logout and `/reload`, which is exactly
@@ -53,7 +53,7 @@ Every rule here exists because of a failure mode seen on this install:
   clients and not others. An unguarded call throws once and the snapshot stops happening for good —
   silently, because nothing reads the error. `test/sensor-addon.test.ts` fails the build if a client
   API is called outside the wrapper.
-- **One global.** `## SavedVariables: PortalstoneDB`, asserted by the same test. A second global is a
+- **One global.** `## SavedVariables: PortalStoneDB`, asserted by the same test. A second global is a
   second file for the app to learn.
 - **Never in combat.** Talent and equipment events fire mid-fight; the write is deferred, not
   dropped. `InCombatLockdown()` guards the flush.
@@ -70,7 +70,7 @@ npm run addon:install          # --install "<path>" to be explicit, --dry to loo
 ```
 
 The installer is the only code in this repo that writes into the game directory, it runs by hand,
-and it writes two files into `Interface/AddOns/PortalstoneSense`. SavedVariables are the game's to
+and it writes two files into `Interface/AddOns/PortalStoneSense`. SavedVariables are the game's to
 write; the agent never touches them.
 
 Verification without the game: `packages/agent/test/sensor.test.ts` reads a fixture file shaped

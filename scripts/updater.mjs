@@ -32,7 +32,7 @@ const name = arg('name', 'portalstone');
 const target = arg('target');
 const from = arg('from');
 const programData = process.env.ProgramData ?? 'C:\\ProgramData';
-const logDir = join(programData, 'Portalstone', 'logs');
+const logDir = join(programData, 'PortalStone', 'logs');
 const logFile = join(logDir, 'updater.log');
 
 if (!target || !from) {

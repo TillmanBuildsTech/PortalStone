@@ -1,10 +1,10 @@
 /**
  * Reading what our own addon writes.
  *
- * `addons/PortalstoneSense` exists because the combat log cannot answer four questions the app
+ * `addons/PortalStoneSense` exists because the combat log cannot answer four questions the app
  * keeps being asked: what spec is this character, what gear were they wearing, what are their
  * professions, and which lockouts are spent. Everything here is a projection of that one
- * SavedVariables file — `PortalstoneDB` — onto those four answers.
+ * SavedVariables file — `PortalStoneDB` — onto those four answers.
  *
  * The reader is deliberately forgiving. The addon runs on era clients, retail clients and at least
  * one custom server, so a field can be missing because that client does not have the API, not
@@ -16,8 +16,8 @@ import { listAddons, readAddon, type AddonFile } from './addons';
 import type { InstallInfo } from './discover';
 import type { Store } from './store';
 
-export const SENSOR_FILE = 'PortalstoneSense.lua';
-export const SENSOR_GLOBAL = 'PortalstoneDB';
+export const SENSOR_FILE = 'PortalStoneSense.lua';
+export const SENSOR_GLOBAL = 'PortalStoneDB';
 
 export interface SensorTab {
   name: string;

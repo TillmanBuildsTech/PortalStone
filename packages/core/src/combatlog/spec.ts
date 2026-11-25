@@ -17,7 +17,7 @@
  * server that hands a talent to everyone makes that talent worthless as a marker, and the table
  * has to know it.
  *
- * None of this replaces ground truth. The sensor addon (addons/PortalstoneSense) writes the tree
+ * None of this replaces ground truth. The sensor addon (addons/PortalStoneSense) writes the tree
  * the character actually has; this module is what the app can still say about the logs it already
  * holds, and it says it in those words.
  */

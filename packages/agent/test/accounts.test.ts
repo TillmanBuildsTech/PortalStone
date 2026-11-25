@@ -72,7 +72,7 @@ const bags = (chars: Record<string, number>): string =>
     .join('\n')}\n},\n}\n`;
 
 const sense = (name: string, updated: number): string =>
-  `PortalstoneDB = {\n["chars"] = {\n["${name}"] = { ["meta"] = { ["updated"] = ${updated} }, ["played"] = { ["total"] = 600 } },\n},\n}\n`;
+  `PortalStoneDB = {\n["chars"] = {\n["${name}"] = { ["meta"] = { ["updated"] = ${updated} }, ["played"] = { ["total"] = 600 } },\n},\n}\n`;
 
 describe('tracked series across accounts', () => {
   it('sums every account, so switching alts does not move the total', () => {
@@ -170,8 +170,8 @@ describe('the sensor across accounts', () => {
   it('reads every account, tagging each character with where it came from', () => {
     const read = readSensor(
       install([
-        { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Alpha', 1_700_000_000), mtimeMs: T } } },
-        { name: 'ACC_B', files: { 'PortalstoneSense.lua': { body: sense('Bravo', 1_700_000_100), mtimeMs: T + 100_000 } } },
+        { name: 'ACC_A', files: { 'PortalStoneSense.lua': { body: sense('Alpha', 1_700_000_000), mtimeMs: T } } },
+        { name: 'ACC_B', files: { 'PortalStoneSense.lua': { body: sense('Bravo', 1_700_000_100), mtimeMs: T + 100_000 } } },
       ]),
     );
     expect(read.state).toBe('ok');
@@ -185,8 +185,8 @@ describe('the sensor across accounts', () => {
   it('still shows the readable account when the other is broken, and says which was skipped', () => {
     const read = readSensor(
       install([
-        { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Alpha', 1_700_000_000), mtimeMs: T } } },
-        { name: 'ACC_B', files: { 'PortalstoneSense.lua': { body: 'PortalstoneDB = {', mtimeMs: T + 100_000 } } },
+        { name: 'ACC_A', files: { 'PortalStoneSense.lua': { body: sense('Alpha', 1_700_000_000), mtimeMs: T } } },
+        { name: 'ACC_B', files: { 'PortalStoneSense.lua': { body: 'PortalStoneDB = {', mtimeMs: T + 100_000 } } },
       ]),
     );
     expect(read.state).toBe('ok');
@@ -266,13 +266,13 @@ describe('repairing series recorded one account at a time', () => {
 
 /** A schema-2 sensor entry: keyed by name and realm, with the name and guid in meta. */
 const sense2 = (name: string, realm: string, guid: string, updated: number): string =>
-  `PortalstoneDB = {\n["schema"] = 2,\n["chars"] = {\n["${name}-${realm}"] = { ["meta"] = { ["name"] = "${name}", ["realm"] = "${realm}", ["guid"] = "${guid}", ["updated"] = ${updated} }, ["played"] = { ["total"] = 900 } },\n},\n}\n`;
+  `PortalStoneDB = {\n["schema"] = 2,\n["chars"] = {\n["${name}-${realm}"] = { ["meta"] = { ["name"] = "${name}", ["realm"] = "${realm}", ["guid"] = "${guid}", ["updated"] = ${updated} }, ["played"] = { ["total"] = 900 } },\n},\n}\n`;
 
 describe('sensor keys with the realm in them', () => {
   it('shows the character by name, and keeps its series when the addon re-keys it', () => {
     const s = store();
     const legacy = install([
-      { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Dead', 1_700_000_000), mtimeMs: T } } },
+      { name: 'ACC_A', files: { 'PortalStoneSense.lua': { body: sense('Dead', 1_700_000_000), mtimeMs: T } } },
     ]);
     ensureSensorMetrics(s, readSensor(legacy));
     const played = s.trackedMetrics().find((m) => m.label === 'Played · Dead')!;
@@ -284,7 +284,7 @@ describe('sensor keys with the realm in them', () => {
       {
         name: 'ACC_A',
         files: {
-          'PortalstoneSense.lua': {
+          'PortalStoneSense.lua': {
             body: sense2('Dead', 'CAMWOW US2 Realm 8 PvP', 'Player-6934-0194514D', 1_700_000_100),
             mtimeMs: T + 100_000,
           },
@@ -305,12 +305,12 @@ describe('sensor keys with the realm in them', () => {
     const s = store();
     ensureSensorMetrics(
       s,
-      readSensor(install([{ name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense('Dead', 1), mtimeMs: T } } }])),
+      readSensor(install([{ name: 'ACC_A', files: { 'PortalStoneSense.lua': { body: sense('Dead', 1), mtimeMs: T } } }])),
     );
     const read = readSensor(
       install([
-        { name: 'ACC_A', files: { 'PortalstoneSense.lua': { body: sense2('Dead', 'Realm A', 'Player-1-A', 2), mtimeMs: T + 1 } } },
-        { name: 'ACC_B', files: { 'PortalstoneSense.lua': { body: sense2('Dead', 'Realm B', 'Player-2-B', 3), mtimeMs: T + 2 } } },
+        { name: 'ACC_A', files: { 'PortalStoneSense.lua': { body: sense2('Dead', 'Realm A', 'Player-1-A', 2), mtimeMs: T + 1 } } },
+        { name: 'ACC_B', files: { 'PortalStoneSense.lua': { body: sense2('Dead', 'Realm B', 'Player-2-B', 3), mtimeMs: T + 2 } } },
       ]),
     );
     ensureSensorMetrics(s, read);
@@ -337,7 +337,7 @@ describe('joining the sensor to the log by guid', () => {
       {
         name: 'ACC_A',
         files: {
-          'PortalstoneSense.lua': {
+          'PortalStoneSense.lua': {
             body: sense2('Dead', 'CAMWOW US2 Realm 8 PvP', 'Player-6934-0194514D', 1_700_000_100),
             mtimeMs: T,
           },
@@ -345,7 +345,7 @@ describe('joining the sensor to the log by guid', () => {
       },
       {
         name: 'ACC_B',
-        files: { 'PortalstoneSense.lua': { body: sense2('Blister', 'Realm 2', 'Player-6798-0490B5DD', 1_700_000_000), mtimeMs: T } },
+        files: { 'PortalStoneSense.lua': { body: sense2('Blister', 'Realm 2', 'Player-6798-0490B5DD', 1_700_000_000), mtimeMs: T } },
       },
     ]);
     const ctx: Ctx = {

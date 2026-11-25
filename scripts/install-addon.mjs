@@ -15,8 +15,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ADDON_DIR = resolve(HERE, '..', 'addons', 'PortalstoneSense');
-const ADDON_NAME = 'PortalstoneSense';
+const ADDON_DIR = resolve(HERE, '..', 'addons', 'PortalStoneSense');
+const ADDON_NAME = 'PortalStoneSense';
 
 /** The same layout hints the agent uses, so both find the same install. */
 const ROOT_HINTS = [
