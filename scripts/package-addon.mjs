@@ -13,63 +13,53 @@
  *   dist/PortalStoneSense-<version>.zip.sha256  checksum, same as the app bundle carries
  *
  * The release version is stamped into the .toc's `## Version:` line so the in-game addon list shows
- * the same number as the download. Source stays untouched; only the copy in the zip is stamped.
+ * the same number as the download. Source stays untouched; only the copy in the zip is stamped. The
+ * zip is written by scripts/lib/zip.mjs (no external `zip`/Compress-Archive), so it builds the same
+ * on every platform and the archive is byte-for-byte reproducible.
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveVersion } from './lib/version.mjs';
+import { writeZip } from './lib/zip.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const addonName = 'PortalStoneSense';
 const srcDir = join(root, 'addons', addonName);
 const distDir = join(root, 'dist');
-const stageRoot = join(distDir, 'addon'); // dist/addon/PortalStoneSense/ — zip the folder, not its contents
-const stageDir = join(stageRoot, addonName);
 
 const version = await resolveVersion(root);
 
-// Fresh staging folder so a rebuild never ships a file a previous version left behind.
-await rm(stageRoot, { recursive: true, force: true });
-await mkdir(stageDir, { recursive: true });
-
 // The addon's shippable files — the same set the by-hand installer copies into the game.
 const files = (await readdir(srcDir)).filter((f) => /\.(lua|toc|md)$/i.test(f));
-if (!files.some((f) => f.toLowerCase().endsWith('.toc'))) {
-  console.error(`addon source has no .toc in ${srcDir}`);
+const tocName = `${addonName}.toc`;
+if (!files.includes(tocName)) {
+  console.error(`addon source has no ${tocName} in ${srcDir}`);
   process.exit(1);
 }
-for (const f of files) await cp(join(srcDir, f), join(stageDir, f));
 
-// Stamp the release version into the staged .toc. The source keeps its own placeholder; only this
-// download is pinned, so the in-game list matches what was published.
-const tocPath = join(stageDir, `${addonName}.toc`);
-const toc = await readFile(tocPath, 'utf8');
-if (!/^## Version:.*$/m.test(toc)) {
-  console.error(`${addonName}.toc has no "## Version:" line to stamp`);
-  process.exit(1);
+// Build the zip entries in memory: a top-level PortalStoneSense/ folder, then each file under it.
+// The .toc is version-stamped on the way in; the file on disk is left as its placeholder.
+const entries = [{ name: `${addonName}/` }];
+for (const f of files) {
+  let data = await readFile(join(srcDir, f));
+  if (f === tocName) {
+    const text = data.toString('utf8');
+    if (!/^## Version:.*$/m.test(text)) {
+      console.error(`${tocName} has no "## Version:" line to stamp`);
+      process.exit(1);
+    }
+    data = Buffer.from(text.replace(/^## Version:.*$/m, `## Version: ${version}`), 'utf8');
+  }
+  entries.push({ name: `${addonName}/${f}`, data });
 }
-await writeFile(tocPath, toc.replace(/^## Version:.*$/m, `## Version: ${version}`));
 
-// Zip the folder itself (zip root = PortalStoneSense/). Windows ships Compress-Archive; CI (ubuntu)
-// and other platforms use the `zip` CLI, the same one the app-bundle step uses.
+await mkdir(distDir, { recursive: true });
 const zipName = `${addonName}-${version}.zip`;
 const zipPath = join(distDir, zipName);
 await rm(zipPath, { force: true });
-if (process.platform === 'win32') {
-  execFileSync(
-    'powershell',
-    ['-NoProfile', '-NonInteractive', '-Command', `Compress-Archive -Path '${stageDir}' -DestinationPath '${zipPath}' -Force`],
-    { stdio: 'inherit' },
-  );
-} else {
-  // Run from the staging root so the folder lands at the zip root. The archive path is relative to
-  // that cwd (../<zip>, i.e. back up into dist/) — some `zip` builds mis-handle an absolute archive
-  // argument, and this mirrors the app-bundle step's proven `cd … && zip -r ../../$ZIP .` form.
-  execFileSync('zip', ['-r', join('..', zipName), addonName], { cwd: stageRoot, stdio: 'inherit' });
-}
+writeZip(zipPath, entries);
 
 // Checksum beside it, matching the app bundle's convention.
 const bytes = await readFile(zipPath);
